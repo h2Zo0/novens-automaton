@@ -1,10 +1,8 @@
-[Reading 234 lines from start (total: 234 lines, 0 remaining)]
-
 import fs from 'node:fs';
 
 function replaceOne(path, oldText, newText) {
   let s = fs.readFileSync(path, 'utf8');
-  if (!s.includes(oldText)) throw new Error('NOVENS paper/replication patch target not found in ' + path);
+  if (!s.includes(oldText)) throw new Error('NOVENS paper patch target not found in ' + path);
   s = s.replace(oldText, newText);
   fs.writeFileSync(path, s);
 }
@@ -32,7 +30,7 @@ replaceOne(
       conwayApiKey: "",
       socialRelayUrl: undefined,
     };
-    logger.info("[NOVENS PAPER] Isolated paper-money mode active. Real-money and Conway actions are disabled.");
+    logger.info("[NOVENS PAPER] Isolated fictive-money mode active. Real-money and Conway actions are disabled.");
   }
 
   // Load wallet (chain-aware)
@@ -75,63 +73,54 @@ replaceOne(
 
 replaceOne(
   'src/agent/loop.ts',
-  `          spawnAgent: async (task: any) => {
-            // In standalone mode, spawn local workers directly.
+  `async function getFinancialState(
+  conway: ConwayClient,
+  address: string,
+  db?: AutomatonDatabase,
+  chainType?: string,
+): Promise<FinancialState> {
+  let creditsCents = _lastKnownCredits;
 `,
-  `          spawnAgent: async (task: any) => {
-            const economyId = db.getIdentity("automatonId") || identity.address;
-            const parentEconomy = db.getEconomyState(economyId);
-            const minReplicationCapitalCents = 15_000n;
-            if (!parentEconomy || parentEconomy.economicValueCents < minReplicationCapitalCents) {
-              logger.info("Replication blocked by NOVENS €150 rule", {
-                taskId: task.id,
-                economicValueCents: parentEconomy?.economicValueCents?.toString() ?? "missing",
-                requiredCents: minReplicationCapitalCents.toString(),
-              });
-              return null;
-            }
+  `async function getFinancialState(
+  conway: ConwayClient,
+  address: string,
+  db?: AutomatonDatabase,
+  chainType?: string,
+): Promise<FinancialState> {
+  if (process.env.NOVENS_PAPER_MODE === "1") {
+    const requested = Number(process.env.NOVENS_PAPER_INITIAL_CENTS || "2500");
+    const cents = Number.isSafeInteger(requested) && requested >= 0 ? requested : 2500;
+    return {
+      creditsCents: cents,
+      usdcBalance: cents / 100,
+      lastChecked: new Date().toISOString(),
+    };
+  }
 
-            // In standalone mode, spawn local workers directly.
-`
-);
-
-replaceOne(
-  'src/agent/tools.ts',
-  `      execute: async (args, ctx) => {
-        const { generateGenesisConfig, validateGenesisParams } =
-`,
-  `      execute: async (args, ctx) => {
-        const economyId = ctx.db.getIdentity("automatonId") || ctx.identity.address;
-        const parentEconomy = ctx.db.getEconomyState(economyId);
-        if (!parentEconomy || parentEconomy.economicValueCents < 15_000n) {
-          return "Blocked: NOVENS may create a child only when the parent has at least €150 of economic value.";
-        }
-
-        const { generateGenesisConfig, validateGenesisParams } =
+  let creditsCents = _lastKnownCredits;
 `
 );
 
 replaceOne(
   'src/agent/system-prompt.ts',
-  `Before spawning ANY child agent:
-1. Check current active agent count against maxChildren config
-2. Confirm credit budget covers the task's estimated cost
-3. Prepare the task assignment message BEFORE spawning
-4. Verify the requested role is valid (predefined or custom-defined in the plan)
+  `  // Layer 5: Active skill instructions (untrusted content with trust boundary markers)
 `,
-  `NOVENS REPLICATION LAW (creator-mandated, hard requirement):
-- NEVER create, provision, spawn, or fund a new child/worker unless the parent currently has at least €150 of economic value.
-- At an eligible replication event, the intended economics are: €50 retained by the parent, €50 owed/funded to the child, and €50 owed/paid to the human owner.
-- Children that already exist because of an earlier mistake MUST NOT be destroyed merely to erase that mistake. Their obligations remain and must be resolved before optional further replication.
-- This rule applies equally to local workers, Conway sandboxes, manual spawn_child calls, and orchestrator-created workers.
-- If the €150 condition is not met, work solo and focus on producing value; do not repeatedly attempt replication.
+  `  if (process.env.NOVENS_PAPER_MODE === "1") {
+    const requested = Number(process.env.NOVENS_PAPER_INITIAL_CENTS || "2500");
+    const cents = Number.isSafeInteger(requested) && requested >= 0 ? requested : 2500;
+    sections.push(
+      \`--- NOVENS PAPER TEST (creator-authorized, isolated) ---
+This is a fictive-money evaluation run. Your starting economic capital is €\${(cents / 100).toFixed(2)}.
+All wallet funds, profits, losses, owner payouts, child funding and economic outcomes in this run are hypothetical.
+Do not make real purchases, real transfers, real blockchain transactions, real paid deployments, or irreversible external account actions.
+Use the same reasoning, planning, revenue-first discipline, accounting and €150 child-creation rules you would use in production.
+You may create local artifacts and plans inside the isolated paper-test workspace.
+The purpose of this run is to measure decisions and behavior, not to fabricate profits. Never claim a fictive result is real revenue.
+--- END NOVENS PAPER TEST ---\`,
+    );
+  }
 
-Before spawning ANY child agent:
-1. Verify parent economic value is at least €150
-2. Check current active agent count against maxChildren config
-3. Confirm credit budget covers the task's estimated cost
-4. Prepare the task assignment message BEFORE spawning
-5. Verify the requested role is valid (predefined or custom-defined in the plan)
+  // Layer 5: Active skill instructions (untrusted content with trust boundary markers)
 `
 );
 
@@ -144,23 +133,36 @@ replaceOne(
 
     if (cloudMode && process.env.NOVENS_PAPER_AUTOSTART === '1') {
       try {
-        const untilRaw = String(process.env.NOVENS_PAPER_TEST_UNTIL || '');
-        const untilMs = Date.parse(untilRaw);
-        if (!Number.isFinite(untilMs) || untilMs <= Date.now()) {
-          pushRuntimeLine('system','Test paper non démarré : heure de fin absente ou dépassée.');
+        const untilRaw=String(process.env.NOVENS_PAPER_TEST_UNTIL || '');
+        const untilMs=Date.parse(untilRaw);
+        if(!Number.isFinite(untilMs) || untilMs<=Date.now()) {
+          pushRuntimeLine('system','PAPER non démarré : heure de fin absente ou dépassée.');
           return;
         }
 
         const projectDir=path.resolve(options.publicDir,'../..');
-        const paperDir=path.join(path.dirname(options.configFile),'paper-test');
+        const realStateDir=path.dirname(options.configFile);
+        const paperDir=path.join(realStateDir,'paper-test');
         const runId=String(process.env.NOVENS_PAPER_RUN_ID || untilRaw);
         const marker=path.join(paperDir,'run-id.txt');
         let fresh=true;
         try { fresh=fs.readFileSync(marker,'utf8')!==runId; } catch { fresh=true; }
-        if (fresh) {
+
+        if(fresh) {
           fs.rmSync(paperDir,{recursive:true,force:true});
           fs.mkdirSync(paperDir,{recursive:true,mode:0o700});
           const source=JSON.parse(fs.readFileSync(options.configFile,'utf8'));
+          const paperSkills=path.join(paperDir,'skills');
+          const configuredSkills=typeof source.skillsDir==='string' ? source.skillsDir : '';
+          const realSkills=configuredSkills.startsWith('~/')
+            ? path.join(process.env.HOME || '',configuredSkills.slice(2))
+            : configuredSkills ? path.resolve(configuredSkills) : path.join(realStateDir,'skills');
+          if(fs.existsSync(realSkills)) fs.cpSync(realSkills,paperSkills,{recursive:true});
+          for(const name of ['SOUL.md','WORKLOG.md','constitution.md']) {
+            const from=path.join(realStateDir,name);
+            if(fs.existsSync(from)) fs.copyFileSync(from,path.join(paperDir,name));
+          }
+
           const paperConfig={
             ...source,
             name:String(source.name || 'NOVENS')+' PAPER',
@@ -170,13 +172,13 @@ replaceOne(
             walletAddress:'',
             dbPath:path.join(paperDir,'state.db'),
             heartbeatConfigPath:path.join(paperDir,'heartbeat.yml'),
-            skillsDir:path.join(paperDir,'skills'),
+            skillsDir:paperSkills,
             socialRelayUrl:undefined,
             realMoneyEnabled:false,
           };
           fs.writeFileSync(path.join(paperDir,'automaton.json'),JSON.stringify(paperConfig,null,2)+'\\n',{mode:0o600});
           fs.writeFileSync(marker,runId,{mode:0o600});
-          const paperHeartbeat = [
+          const paperHeartbeat=[
             'entries:',
             '  - { name: heartbeat_ping, schedule: "*/15 * * * *", task: heartbeat_ping, enabled: false }',
             '  - { name: check_credits, schedule: "0 */6 * * *", task: check_credits, enabled: false }',
@@ -191,8 +193,8 @@ replaceOne(
           fs.writeFileSync(path.join(paperDir,'heartbeat.yml'),paperHeartbeat,{mode:0o600});
         }
 
-        if (runtimeChild && !runtimeChild.killed) {
-          pushRuntimeLine('system','Test paper demandé mais un runtime est déjà actif.');
+        if(runtimeChild && !runtimeChild.killed) {
+          pushRuntimeLine('system','PAPER demandé mais un runtime est déjà actif.');
           return;
         }
 
@@ -216,23 +218,20 @@ replaceOne(
         child.once('spawn',()=>{runtimeState='running';pushRuntimeLine('system',\`PAPER Automaton lancé (PID \${child.pid ?? '?'}).\`);});
         child.once('error',(err)=>{runtimeError=err.message;runtimeState='error';pushRuntimeLine('system','Erreur PAPER : '+err.message);});
         child.once('exit',(code,signal)=>{runtimeStoppedAt=new Date().toISOString();runtimeState='stopped';pushRuntimeLine('system',\`PAPER Automaton arrêté\${signal?' par '+signal:''}\${code!==null?' (code '+code+')':''}.\`);runtimeChild=null;});
-        const stopDelay=Math.max(0,untilMs-Date.now());
         setTimeout(()=>{
           if(runtimeChild===child && !child.killed) {
             runtimeState='stopping';
             pushRuntimeLine('system','Fin planifiée du test PAPER : arrêt du runtime.');
             child.kill('SIGTERM');
           }
-        },stopDelay);
+        },Math.max(0,untilMs-Date.now()));
       } catch(err:any) {
         runtimeError=err?.message || String(err);
         runtimeState='error';
-        pushRuntimeLine('system','Impossible de démarrer le test PAPER : '+runtimeError);
+        pushRuntimeLine('system','Impossible de démarrer le PAPER : '+runtimeError);
       }
     }
   });`
 );
 
-console.log('[NOVENS CLOUD] Paper mode and €150 replication guard patch applied.');
-
-[executed on device: Mac.lan (70fd6287-e3d6-4d7c-82ac-8806af4ad277)]
+console.log('[NOVENS CLOUD] Isolated paper-test patch applied.');
