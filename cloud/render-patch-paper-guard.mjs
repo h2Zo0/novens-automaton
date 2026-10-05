@@ -126,6 +126,21 @@ The purpose of this run is to measure decisions and behavior, not to fabricate p
 
 replaceOne(
   'src/dashboard/server.ts',
+  `  const pushRuntimeLine = (stream:'stdout'|'stderr'|'system', line:string) => {
+    runtimeLines.push({at:new Date().toISOString(),stream,line});
+    if(runtimeLines.length>300) runtimeLines.splice(0,runtimeLines.length-300);
+  };`,
+  `  const pushRuntimeLine = (stream:'stdout'|'stderr'|'system', line:string) => {
+    runtimeLines.push({at:new Date().toISOString(),stream,line});
+    if(runtimeLines.length>300) runtimeLines.splice(0,runtimeLines.length-300);
+    if(process.env.NOVENS_PAPER_AUTOSTART==='1' || process.env.NOVENS_PAPER_MODE==='1') {
+      console.log(\`[NOVENS RUNTIME][\${stream}] \${line}\`);
+    }
+  };`
+);
+
+replaceOne(
+  'src/dashboard/server.ts',
   `  server.on('listening', () => { options.balanceMonitor?.start(); options.secondaryBalanceMonitor?.start(); });`,
   `  server.on('listening', () => {
     options.balanceMonitor?.start();
