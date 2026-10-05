@@ -4,6 +4,7 @@ tar() {
   if [ $rc -eq 0 ]; then
     [ -f cloud/render-patch-auth.mjs ] && node cloud/render-patch-auth.mjs
     [ -f cloud/render-patch-portfolio.mjs ] && node cloud/render-patch-portfolio.mjs
+    [ -f cloud/render-patch-runtime.mjs ] && node cloud/render-patch-runtime.mjs
   fi
   return $rc
 }
