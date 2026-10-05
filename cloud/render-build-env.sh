@@ -2,11 +2,9 @@ tar() {
   command /bin/tar "$@"
   local rc=$?
   if [ $rc -eq 0 ]; then
+    [ -f cloud/local-sync.patch ] && git apply --whitespace=nowarn cloud/local-sync.patch
     [ -f cloud/render-patch-auth.mjs ] && node cloud/render-patch-auth.mjs
     [ -f cloud/render-patch-portfolio.mjs ] && node cloud/render-patch-portfolio.mjs
-    [ -f cloud/render-patch-runtime.mjs ] && node cloud/render-patch-runtime.mjs
-    [ -f cloud/render-patch-inference-preflight.mjs ] && node cloud/render-patch-inference-preflight.mjs
-    [ -f cloud/economy-policy.patch ] && git apply --whitespace=nowarn cloud/economy-policy.patch
   fi
   return $rc
 }
