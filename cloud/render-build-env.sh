@@ -6,6 +6,7 @@ tar() {
     [ -f cloud/render-patch-portfolio.mjs ] && node cloud/render-patch-portfolio.mjs
     [ -f cloud/render-patch-runtime.mjs ] && node cloud/render-patch-runtime.mjs
     [ -f cloud/render-patch-inference-preflight.mjs ] && node cloud/render-patch-inference-preflight.mjs
+    [ -f cloud/economy-policy.patch ] && git apply --whitespace=nowarn cloud/economy-policy.patch
   fi
   return $rc
 }
