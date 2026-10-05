@@ -599,7 +599,8 @@ index 0000000..9b353cc
 +
 +  const apply = () => {
 
-[executed on device: Mac.lan (70fd6287-e3d6-4d7c-82ac-8806af4ad277)]+    const state = db.getEconomyState(agentId);
+[executed on device: Mac.lan (70fd6287-e3d6-4d7c-82ac-8806af4ad277)]
++    const state = db.getEconomyState(agentId);
 +    if (!state || !canDeploy(state)) {
 +      throw new Error("Child creation economic threshold not satisfied");
 +    }
