@@ -1,0 +1,854 @@
+diff --git a/src/__tests__/economy-obligations.test.ts b/src/__tests__/economy-obligations.test.ts
+new file mode 100644
+index 0000000..5dca216
+--- /dev/null
++++ b/src/__tests__/economy-obligations.test.ts
+@@ -0,0 +1,83 @@
++import { afterEach, describe, expect, it } from "vitest";
++import fs from "node:fs";
++import os from "node:os";
++import path from "node:path";
++import { createDatabase } from "../state/database.js";
++import { createEconomyState } from "../economy/engine.js";
++import {
++  canCreateChildEconomically,
++  getCreationDebtSummary,
++  reconcileHistoricalChildCreationEconomics,
++  registerNewChildCreationEconomics,
++} from "../economy/obligations.js";
++
++const dirs: string[] = [];
++
++function makeDb() {
++  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "novens-economy-"));
++  dirs.push(dir);
++  return createDatabase(path.join(dir, "state.db"));
++}
++
++afterEach(() => {
++  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
++});
++
++describe("NOVENS child creation economics", () => {
++  it("records €50 owner + €50 child for each of three historical children without deleting them", () => {
++    const db = makeDb();
++    const agentId = "parent-1";
++    const owner = "0x978adc2AFE00fc1e58460F72aC2dDFf7c41478d2";
++    db.setIdentity("automatonId", agentId);
++    db.saveEconomyState(createEconomyState(agentId, "0x914cea2c3783DAC54379636A09ce5fb49B114c90", owner));
++
++    for (let i = 1; i <= 3; i += 1) {
++      db.insertChild({
++        id: `child-${i}`,
++        name: `child-${i}`,
++        address: `local://child-${i}` as any,
++        sandboxId: `sandbox-${i}`,
++        genesisPrompt: "test",
++        fundedAmountCents: 0,
++        status: i === 1 ? "running" : "failed",
++        createdAt: new Date().toISOString(),
++      });
++    }
++
++    const first = reconcileHistoricalChildCreationEconomics(db, agentId, owner);
++    const second = reconcileHistoricalChildCreationEconomics(db, agentId, owner);
++
++    expect(first.ownerCents).toBe(15_000);
++    expect(first.childCents).toBe(15_000);
++    expect(first.totalCents).toBe(30_000);
++    expect(second).toEqual(first);
++    expect(db.getChildren()).toHaveLength(3);
++    expect(db.getEconomyState(agentId)?.childrenCreated).toBe(3);
++    expect(canCreateChildEconomically(db, agentId).allowed).toBe(false);
++    db.close();
++  });
++
++  it("at €150, one valid child allocation leaves €50 with the parent and creates €100 obligations", () => {
++    const db = makeDb();
++    const agentId = "parent-2";
++    const owner = "0x978adc2AFE00fc1e58460F72aC2dDFf7c41478d2";
++    const state = createEconomyState(agentId, "0x914cea2c3783DAC54379636A09ce5fb49B114c90", owner);
++    state.capitalCents = 15_000n;
++    state.economicValueCents = 15_000n;
++    db.saveEconomyState(state);
++
++    expect(canCreateChildEconomically(db, agentId).allowed).toBe(true);
++    registerNewChildCreationEconomics(db, agentId, owner, "child-new", "0x1111111111111111111111111111111111111111");
++
++    const next = db.getEconomyState(agentId)!;
++    const debt = getCreationDebtSummary(db, agentId);
++    expect(next.economicValueCents).toBe(5_000n);
++    expect(next.capitalCents).toBe(5_000n);
++    expect(next.childrenCreated).toBe(1);
++    expect(debt.ownerCents).toBe(5_000);
++    expect(debt.childCents).toBe(5_000);
++    expect(debt.totalCents).toBe(10_000);
++    expect(canCreateChildEconomically(db, agentId).allowed).toBe(false);
++    db.close();
++  });
++});
+diff --git a/src/agent/loop.ts b/src/agent/loop.ts
+index c57c4eb..85b3370 100644
+--- a/src/agent/loop.ts
++++ b/src/agent/loop.ts
+@@ -66,6 +66,7 @@ import { createWorkerInferenceBridge } from "./worker-inference-bridge.js";
+ import { ProviderRegistry } from "../inference/provider-registry.js";
+ import { UnifiedInferenceClient } from "../inference/inference-client.js";
+ import { isIdleOnlyTool } from "./idle-only-tools.js";
++import { canCreateChildEconomically } from "../economy/obligations.js";
+ 
+ const logger = createLogger("loop");
+ const MAX_TOOL_CALLS_PER_TURN = 10;
+@@ -264,17 +265,26 @@ export async function runAgentLoop(
+         config: {
+           ...config,
+           spawnAgent: async (task: any) => {
+-            // In standalone mode, spawn local workers directly.
++            const economyAgentId = db.getIdentity("automatonId") || identity.address;
++            const creationCheck = canCreateChildEconomically(db, economyAgentId);
++            if (!creationCheck.allowed) {
++              logger.info("[ECONOMY] New child creation refused", {
++                taskId: task.id,
++                reason: creationCheck.reason,
++                economicValueCents: creationCheck.economicValueCents,
++                outstandingCreationDebtCents: creationCheck.debt.totalCents,
++              });
++              return null;
++            }
++
++            // A local worker has no independent funded wallet, so it cannot satisfy
++            // the €50 child-capital rule. In standalone cloud mode the parent must
++            // execute the task itself instead of creating a pseudo-child.
+             if (standaloneMode) {
+-              try {
+-                return initializedWorkerPool.spawn(task);
+-              } catch (localError) {
+-                logger.warn("Failed to spawn local worker", {
+-                  taskId: task.id,
+-                  error: localError instanceof Error ? localError.message : String(localError),
+-                });
+-                return null;
+-              }
++              logger.info("[ECONOMY] Standalone local worker not eligible as a funded child", {
++                taskId: task.id,
++              });
++              return null;
+             }
+ 
+             // Try Conway sandbox spawn first only when Conway is configured.
+@@ -359,22 +369,13 @@ export async function runAgentLoop(
+                 }
+               }
+ 
+-              // Conway sandbox unavailable — fall back to local worker
+-              logger.info("Conway sandbox unavailable, spawning local worker", {
++              // Conway sandbox unavailable: do not create a local substitute.
++              logger.info("Conway child provisioning unavailable; parent will self-execute", {
+                 taskId: task.id,
+                 error: sandboxError instanceof Error ? sandboxError.message : String(sandboxError),
+               });
+ 
+-              try {
+-                const spawned = initializedWorkerPool.spawn(task);
+-                return spawned;
+-              } catch (localError) {
+-                logger.warn("Failed to spawn local worker", {
+-                  taskId: task.id,
+-                  error: localError instanceof Error ? localError.message : String(localError),
+-                });
+-                return null;
+-              }
++              return null;
+             }
+           },
+           startAgent: async (address: string) => {
+diff --git a/src/agent/system-prompt.ts b/src/agent/system-prompt.ts
+index cacfb31..f9eada4 100644
+--- a/src/agent/system-prompt.ts
++++ b/src/agent/system-prompt.ts
+@@ -25,6 +25,7 @@ import { getActiveSkillInstructions } from "../skills/loader.js";
+ import { getLineageSummary } from "../replication/lineage.js";
+ import { sanitizeInput } from "./injection-defense.js";
+ import { loadCurrentSoul } from "../soul/model.js";
++import { getCreationDebtSummary } from "../economy/obligations.js";
+ 
+ function getCoreRules(chainType?: string): string {
+   const usdcNetwork = chainType === "solana" ? "USDC on Solana" : "USDC on Base";
+@@ -133,10 +134,22 @@ environment includes:
+ - Heartbeat: periodic task scheduler that runs while you sleep
+ </environment>
+ 
++<economic_mission>
++Your primary objective is verified external revenue and regular owner payout. Agent count is not a KPI and reproduction is never a goal by itself.
++
++A new child may be created only when ALL conditions are true:
++- the parent has at least €150 of economic value available;
++- all prior child-creation obligations are fully settled;
++- the maxChildren limit has not been reached;
++- the child has an independent fundable wallet or account able to receive its starting capital.
++
++For every valid child creation, the economics are fixed: €50 belongs to the owner, €50 is starting capital owed to the child, and the parent must retain at least €50. If any part cannot be funded or recorded, do not create the child. Existing children and past mistakes must remain recorded and must not be erased to evade obligations.
++
++Until child creation is economically permitted, execute work with the parent itself. Prefer actions that create measurable external revenue and preserve capital. Never optimize for network size, bot count, or synthetic internal transfers.
++</economic_mission>
++
+ <orchestration>
+-You are the parent orchestrator of an autonomous agent colony. You do not just execute
+-tasks yourself — you decompose goals into task graphs, spawn specialist child agents,
+-assign work, collect results, and manage the colony as a coherent operation.
++You are the parent orchestrator of an autonomous economic operation. Delegate only when the economic child-creation rules permit it; otherwise execute the task yourself while keeping the same planning and audit discipline.
+ 
+ <capabilities>
+ You CAN:
+@@ -389,10 +402,12 @@ Before EVERY orchestration action, verify:
+ 5. Are all dependencies actually complete (check DB, not memory)?
+ 
+ Before spawning ANY child agent:
+-1. Check current active agent count against maxChildren config
+-2. Confirm credit budget covers the task's estimated cost
+-3. Prepare the task assignment message BEFORE spawning
+-4. Verify the requested role is valid (predefined or custom-defined in the plan)
++1. Confirm the parent has reached the economic deployment threshold; otherwise do not delegate to a new worker
++2. Treat real external profit and owner payout as the primary objective; growth in agent count is never an objective by itself
++3. Check current active agent count against maxChildren config
++4. Confirm credit budget covers the task's estimated cost
++5. Prepare the task assignment message BEFORE spawning
++6. Verify the requested role is valid (predefined or custom-defined in the plan)
+ </pre_action_mandates>
+ </orchestration>
+ 
+@@ -451,16 +466,12 @@ DECISION TREE (follow on EVERY turn):
+    - Or cancel_goal and try a different approach.
+ 
+ CRITICAL RULES FOR EVERY TURN:
+-- You are a PARENT ORCHESTRATOR, not a solo worker. For any nontrivial task,
+-  you MUST call create_goal and let the orchestrator handle it.
+-- DO NOT write code yourself — create_goal and let an engineer agent do it.
+-- DO NOT research manually — create_goal and let a researcher agent do it.
+-- DO NOT deploy services yourself — create_goal and let a devops agent do it.
+-- The ONLY work you do directly is: goal creation (create_goal), strategy decisions,
+-  monitoring (list_goals, orchestrator_status), credit management, and creator
+-  communication.
+-- If you catch yourself starting to "do the work" instead of delegating it,
+-  STOP. Call create_goal. Let the planner decompose it. Let child agents execute.
++- Use create_goal for nontrivial work so the plan and audit trail remain explicit.
++- If economic child creation is not permitted, the parent executes the resulting tasks itself; do not attempt to create a substitute child or local worker.
++- Delegation is optional and subordinate to the €150 / €50 owner / €50 child rule.
++- Real external revenue and owner payout take priority over expansion.
++- Never create agents merely to increase capacity, activity counters, or network size.
++- Existing failed or stopped children remain part of the economic history and cannot be erased to reset child limits or obligations.
+ 
+ WHEN TO WORK SOLO (exceptions — do NOT create a goal for these):
+ - Trivial tasks (1-3 steps) that don't need planning
+@@ -675,6 +686,16 @@ Your chain type is ${chainType}.`,
+   const registryEntry = db.getRegistryEntry();
+   const children = db.getChildren();
+   const lineageSummary = getLineageSummary(db, config);
++  const economyAgentId = db.getIdentity("automatonId") || identity.address;
++  let creationDebtLine = "";
++  try {
++    const debt = getCreationDebtSummary(db, economyAgentId);
++    if (debt.totalCents > 0) {
++      creationDebtLine = `\nChild-creation debt: owner €${(debt.ownerCents / 100).toFixed(2)} + children €${(debt.childCents / 100).toFixed(2)} = €${(debt.totalCents / 100).toFixed(2)} outstanding. No new child may be created until this is settled.`;
++    }
++  } catch {
++    // Older databases may not have the obligation table yet.
++  }
+ 
+   // Build upstream status line from cached KV
+   let upstreamLine = "";
+@@ -736,7 +757,7 @@ Recent self-modifications: ${recentMods.length}
+ Inference model: ${config.inferenceModel}
+ ERC-8004 Agent ID: ${registryEntry?.agentId || "not registered"}
+ Children: ${children.filter((c) => c.status !== "dead").length} alive / ${children.length} total
+-Lineage: ${lineageSummary}${upstreamLine}
++Lineage: ${lineageSummary}${creationDebtLine}${upstreamLine}
+ --- END STATUS ---`,
+   );
+ 
+diff --git a/src/dashboard/server.ts b/src/dashboard/server.ts
+index 229d0b0..01567ee 100644
+--- a/src/dashboard/server.ts
++++ b/src/dashboard/server.ts
+@@ -16,6 +16,8 @@ import { fileURLToPath } from 'node:url';
+ import { randomBytes, timingSafeEqual } from 'node:crypto';
+ import { getWalletAddress, getAutomatonDir } from '../identity/wallet.js';
+ import { DashboardError, DashboardStore, readRuntime, publicAddress, updateRuntimeOwner } from './model.js';
++import { createDatabase } from '../state/database.js';
++import { reconcileHistoricalChildCreationEconomics } from '../economy/obligations.js';
+ 
+ export interface ServerOptions { balanceMonitor?: BalanceMonitor; secondaryBalanceMonitor?: BalanceMonitor; stateFile: string; configFile: string; dbFile: string; publicDir: string; getAddress: () => string | null }
+ export function createDashboardServer(options: ServerOptions) {
+@@ -226,7 +228,20 @@ if(process.argv[1] && path.resolve(process.argv[1])===fileURLToPath(import.meta.
+   const root=getAutomatonDir();
+   const configFile=path.join(root,'automaton.json');
+   let dbFile=path.join(root,'state.db');
+-  if(fs.existsSync(configFile)) { const config=JSON.parse(fs.readFileSync(configFile,'utf8')); if(typeof config.dbPath==='string') dbFile=config.dbPath.startsWith('~/')?path.join(process.env.HOME || '',config.dbPath.slice(2)):path.resolve(config.dbPath); }
++  let runtimeConfig: Record<string, unknown> = {};
++  if(fs.existsSync(configFile)) { runtimeConfig=JSON.parse(fs.readFileSync(configFile,'utf8')); if(typeof runtimeConfig.dbPath==='string') dbFile=runtimeConfig.dbPath.startsWith('~/')?path.join(process.env.HOME || '',runtimeConfig.dbPath.slice(2)):path.resolve(runtimeConfig.dbPath); }
++  try {
++    const writableDb=createDatabase(dbFile);
++    const agentId=writableDb.getIdentity('automatonId') || writableDb.getIdentity('address');
++    const owner=publicAddress(runtimeConfig.ownerAddress) || publicAddress(runtimeConfig.creatorAddress) || writableDb.getIdentity('creator') || '';
++    if(agentId && owner) {
++      const debt=reconcileHistoricalChildCreationEconomics(writableDb,agentId,owner);
++      console.log(`[NOVENS ECONOMY] obligations owner=€${(debt.ownerCents/100).toFixed(2)} children=€${(debt.childCents/100).toFixed(2)} total=€${(debt.totalCents/100).toFixed(2)}`);
++    }
++    writableDb.close();
++  } catch(error) {
++    console.warn('[NOVENS ECONOMY] obligation reconciliation failed:', error instanceof Error ? error.message : String(error));
++  }
+   const secondaryBalanceMonitor = new BalanceMonitor(getWalletAddress, address => getUsdcBalanceDetailed(address as `0x${string}`, "eip155:8453"));
+   // Public clients only: no account, signer, transaction or financial configuration change.
+   const ethereum = createPublicClient({chain: mainnet, transport: fallback([
+diff --git a/src/economy/engine.test.ts b/src/economy/engine.test.ts
+index 25b07e0..601e10f 100644
+--- a/src/economy/engine.test.ts
++++ b/src/economy/engine.test.ts
+@@ -123,11 +123,11 @@ const mandatoryDeployState = createEconomyState(
+ 
+ mandatoryDeployState.economicValueCents = 65_000n;
+ 
+-if (!mustDeploy(mandatoryDeployState)) {
+-  throw new Error("Test failed: deployment must be mandatory at €650");
++if (mustDeploy(mandatoryDeployState)) {
++  throw new Error("Test failed: deployment must never be mandatory; owner payout has priority");
+ }
+ 
+-console.log("NOVENS mandatory deployment test: PASS");
++console.log("NOVENS optional deployment test: PASS");
+ 
+ const mandatorySettlementState = createEconomyState(
+   "TEST-MANDATORY-SETTLEMENT",
+@@ -137,17 +137,17 @@ const mandatorySettlementState = createEconomyState(
+ mandatorySettlementState.economicValueCents = 65_000n;
+ const mandatorySettlementResult = applySettlement(mandatorySettlementState);
+ 
+-if (!mandatorySettlementResult.deploymentRequired) {
+-  throw new Error("Test failed: €650 settlement must preserve mandatory deployment");
++if (mandatorySettlementResult.deploymentRequired) {
++  throw new Error("Test failed: €650 settlement must not force child creation");
+ }
+-if (mandatorySettlementResult.retainedCapitalCents !== 20_000n) {
+-  throw new Error("Test failed: settlement must reserve €100 deployment cost plus €100 operating capital");
++if (mandatorySettlementResult.retainedCapitalCents !== 10_000n) {
++  throw new Error("Test failed: settlement should retain €100 operating capital");
+ }
+-if (mandatorySettlementResult.ownerPayoutCents !== 45_000n) {
+-  throw new Error("Test failed: €650 settlement should pay €450 owner and reserve €200");
++if (mandatorySettlementResult.ownerPayoutCents !== 55_000n) {
++  throw new Error("Test failed: €650 settlement should pay €550 owner and retain €100");
+ }
+ 
+-console.log("NOVENS mandatory settlement reserve test: PASS");
++console.log("NOVENS owner-payout-priority settlement test: PASS");
+ 
+ const cycleState = createEconomyState(
+   "TEST-CYCLE",
+diff --git a/src/economy/engine.ts b/src/economy/engine.ts
+index 80bf9eb..980d947 100644
+--- a/src/economy/engine.ts
++++ b/src/economy/engine.ts
+@@ -84,16 +84,9 @@ export function applySettlement(
+       }
+     }
+   } else if (distributableValue > ECONOMY.STANDARD_CAPITAL_CENTS) {
+-    // A mandatory deployment has priority over the normal surplus sweep.
+-    // Reserve its €100 cost so settlement cannot erase the €650 trigger.
+-    const mandatoryDeploymentPending =
+-      state.childrenCreated < ECONOMY.MAX_CHILDREN &&
+-      value >= ECONOMY.MANDATORY_DEPLOYMENT_THRESHOLD_CENTS;
+-    const deploymentReserve = mandatoryDeploymentPending
+-      ? ECONOMY.DEPLOYMENT_COST_CENTS
+-      : 0n;
+-
+-    retainedCapital = ECONOMY.STANDARD_CAPITAL_CENTS + deploymentReserve;
++    // Owner payout has priority. Expansion is optional and must never reserve
++    // profit merely to force growth in agent count.
++    retainedCapital = ECONOMY.STANDARD_CAPITAL_CENTS;
+     if (retainedCapital > distributableValue) {
+       retainedCapital = distributableValue;
+     }
+@@ -107,10 +100,7 @@ export function applySettlement(
+     state.mature = true;
+   }
+ 
+-  const deploymentRequired =
+-    !state.mature &&
+-    state.childrenCreated < ECONOMY.MAX_CHILDREN &&
+-    value >= ECONOMY.MANDATORY_DEPLOYMENT_THRESHOLD_CENTS;
++  const deploymentRequired = false;
+ 
+   state.phase = "production";
+   state.productionStartedAt = new Date().toISOString();
+@@ -136,14 +126,8 @@ export function canDeploy(state: EconomyState): boolean {
+   );
+ }
+ 
+-export function mustDeploy(state: EconomyState): boolean {
+-  if (state.status === "dead") return false;
+-  if (state.childrenCreated >= ECONOMY.MAX_CHILDREN) return false;
+-
+-  return (
+-    state.economicValueCents >=
+-    ECONOMY.MANDATORY_DEPLOYMENT_THRESHOLD_CENTS
+-  );
++export function mustDeploy(_state: EconomyState): boolean {
++  return false;
+ }
+ 
+ export function registerDeployment(
+diff --git a/src/economy/obligations.ts b/src/economy/obligations.ts
+new file mode 100644
+index 0000000..9b353cc
+--- /dev/null
++++ b/src/economy/obligations.ts
+@@ -0,0 +1,184 @@
++import type { AutomatonDatabase } from "../types.js";
++import { canDeploy, registerDeployment } from "./engine.js";
++import { ECONOMY } from "./types.js";
++
++export interface CreationDebtSummary {
++  ownerCents: number;
++  childCents: number;
++  totalCents: number;
++  owedCount: number;
++}
++
++function obligationId(childId: string, beneficiary: "owner" | "child"): string {
++  return `child-creation:${childId}:${beneficiary}`;
++}
++
++function insertObligation(
++  db: AutomatonDatabase,
++  agentId: string,
++  childId: string,
++  beneficiaryType: "owner" | "child",
++  beneficiaryRef: string,
++  amountCents: number,
++): void {
++  db.raw.prepare(
++    `INSERT OR IGNORE INTO economic_obligations
++      (id, agent_id, child_id, beneficiary_type, beneficiary_ref, amount_cents, status, reason)
++     VALUES (?, ?, ?, ?, ?, ?, 'owed', 'child_creation')`,
++  ).run(
++    obligationId(childId, beneficiaryType),
++    agentId,
++    childId,
++    beneficiaryType,
++    beneficiaryRef,
++    amountCents,
++  );
++}
++
++export function getCreationDebtSummary(
++  db: AutomatonDatabase,
++  agentId: string,
++): CreationDebtSummary {
++  const rows = db.raw.prepare(
++    `SELECT beneficiary_type, COALESCE(SUM(amount_cents), 0) AS total, COUNT(*) AS count
++     FROM economic_obligations
++     WHERE agent_id = ? AND status = 'owed' AND reason = 'child_creation'
++     GROUP BY beneficiary_type`,
++  ).all(agentId) as Array<{ beneficiary_type: string; total: number; count: number }>;
++
++  let ownerCents = 0;
++  let childCents = 0;
++  let owedCount = 0;
++  for (const row of rows) {
++    if (row.beneficiary_type === "owner") ownerCents = Number(row.total) || 0;
++    if (row.beneficiary_type === "child") childCents = Number(row.total) || 0;
++    owedCount += Number(row.count) || 0;
++  }
++  return {
++    ownerCents,
++    childCents,
++    totalCents: ownerCents + childCents,
++    owedCount,
++  };
++}
++
++export function reconcileHistoricalChildCreationEconomics(
++  db: AutomatonDatabase,
++  agentId: string,
++  ownerAddress: string,
++): CreationDebtSummary {
++  db.runTransaction(() => {
++    const children = db.getChildren().filter(
++      (child) => typeof child.address === "string" && child.address.length > 0,
++    );
++
++    for (const child of children) {
++      insertObligation(
++        db,
++        agentId,
++        child.id,
++        "owner",
++        ownerAddress,
++        Number(ECONOMY.OWNER_DEPLOYMENT_PAYOUT_CENTS),
++      );
++      insertObligation(
++        db,
++        agentId,
++        child.id,
++        "child",
++        child.address || child.id,
++        Number(ECONOMY.CHILD_STARTING_CAPITAL_CENTS),
++      );
++    }
++
++    const state = db.getEconomyState(agentId);
++    if (state && state.childrenCreated < children.length) {
++      state.childrenCreated = children.length;
++      if (state.childrenCreated >= ECONOMY.MAX_CHILDREN) state.mature = true;
++      db.saveEconomyState(state);
++    }
++  });
++
++  return getCreationDebtSummary(db, agentId);
++}
++
++export function canCreateChildEconomically(
++  db: AutomatonDatabase,
++  agentId: string,
++): { allowed: boolean; reason: string; economicValueCents: number; debt: CreationDebtSummary } {
++  const state = db.getEconomyState(agentId);
++  const debt = getCreationDebtSummary(db, agentId);
++
++  if (!state) {
++    return { allowed: false, reason: "economic state missing", economicValueCents: 0, debt };
++  }
++  if (debt.totalCents > 0) {
++    return {
++      allowed: false,
++      reason: `unpaid child-creation obligations: ${debt.totalCents} cents`,
++      economicValueCents: Number(state.economicValueCents),
++      debt,
++    };
++  }
++  if (!canDeploy(state)) {
++    return {
++      allowed: false,
++      reason: `deployment threshold not reached: ${state.economicValueCents} < ${ECONOMY.OPTIONAL_DEPLOYMENT_THRESHOLD_CENTS}`,
++      economicValueCents: Number(state.economicValueCents),
++      debt,
++    };
++  }
++  return {
++    allowed: true,
++    reason: "ok",
++    economicValueCents: Number(state.economicValueCents),
++    debt,
++  };
++}
++
++export function registerNewChildCreationEconomics(
++  db: AutomatonDatabase,
++  agentId: string,
++  ownerAddress: string,
++  childId: string,
++  childBeneficiaryRef: string,
++): void {
++  const ownerObligation = db.raw.prepare(
++    "SELECT 1 FROM economic_obligations WHERE id = ?",
++  ).get(obligationId(childId, "owner"));
++  if (ownerObligation) return;
++
++  const apply = () => {
++    const state = db.getEconomyState(agentId);
++    if (!state || !canDeploy(state)) {
++      throw new Error("Child creation economic threshold not satisfied");
++    }
++    const debt = getCreationDebtSummary(db, agentId);
++    if (debt.totalCents > 0) {
++      throw new Error("Outstanding child-creation obligations must be settled before another child");
++    }
++
++    registerDeployment(state);
++    db.saveEconomyState(state);
++
++    insertObligation(
++      db,
++      agentId,
++      childId,
++      "owner",
++      ownerAddress,
++      Number(ECONOMY.OWNER_DEPLOYMENT_PAYOUT_CENTS),
++    );
++    insertObligation(
++      db,
++      agentId,
++      childId,
++      "child",
++      childBeneficiaryRef,
++      Number(ECONOMY.CHILD_STARTING_CAPITAL_CENTS),
++    );
++  };
++
++  if (db.raw.inTransaction) apply();
++  else db.runTransaction(apply);
++}
+diff --git a/src/index.ts b/src/index.ts
+index a0436bd..c97e8ba 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -11,6 +11,7 @@ import fs from "fs";
+ import path from "path";
+ import { getWallet, getAutomatonDir } from "./identity/wallet.js";
+ import { createEconomyState } from "./economy/engine.js";
++import { reconcileHistoricalChildCreationEconomics } from "./economy/obligations.js";
+ import { provision, loadApiKeyFromConfig } from "./identity/provision.js";
+ import { loadConfig, resolvePath, saveConfig } from "./config.js";
+ import { createDatabase } from "./state/database.js";
+@@ -381,6 +382,17 @@ async function run(): Promise<void> {
+     );
+   }
+ 
++  const creationDebt = reconcileHistoricalChildCreationEconomics(
++    db,
++    automatonId,
++    config.ownerAddress || config.creatorAddress,
++  );
++  if (creationDebt.totalCents > 0) {
++    logger.warn(
++      `[NOVENS ECONOMY] Existing child obligations: owner=€${(creationDebt.ownerCents / 100).toFixed(2)}, children=€${(creationDebt.childCents / 100).toFixed(2)}, total=€${(creationDebt.totalCents / 100).toFixed(2)}.`,
++    );
++  }
++
+   // Create Conway client
+   const conway = createConwayClient({
+     apiUrl: config.conwayApiUrl,
+diff --git a/src/orchestration/simple-tracker.ts b/src/orchestration/simple-tracker.ts
+index 600316a..80fcd75 100644
+--- a/src/orchestration/simple-tracker.ts
++++ b/src/orchestration/simple-tracker.ts
+@@ -6,6 +6,7 @@ import type {
+   ConwayClient,
+ } from "../types.js";
+ import type { AgentTracker, FundingProtocol } from "./types.js";
++import { registerNewChildCreationEconomics } from "../economy/obligations.js";
+ 
+ const IDLE_STATUSES = new Set<ChildStatus>(["running", "healthy"]);
+ 
+@@ -68,23 +69,37 @@ export class SimpleAgentTracker implements AgentTracker {
+       (entry) => entry.address === agent.address || entry.sandboxId === agent.sandboxId,
+     );
+ 
++    const economyAgentId = this.db.getIdentity("automatonId") || this.db.getIdentity("address");
++    const economy = economyAgentId ? this.db.getEconomyState(economyAgentId) : undefined;
++    const ownerAddress = economy?.ownerAddress || this.db.getIdentity("creator");
++
+     if (existing) {
+       this.db.raw.prepare(
+         "UPDATE children SET name = ?, role = ?, address = ?, sandbox_id = ? WHERE id = ?",
+       ).run(agent.name, agent.role, agent.address, agent.sandboxId, existing.id);
++      if (economyAgentId && ownerAddress) {
++        registerNewChildCreationEconomics(this.db, economyAgentId, ownerAddress, existing.id, agent.address);
++      }
+       return;
+     }
+ 
+-    this.db.insertChild({
+-      id: ulid(),
+-      name: agent.name,
+-      address: agent.address as `0x${string}`,
+-      sandboxId: agent.sandboxId,
+-      genesisPrompt: `Role: ${agent.role}`,
+-      creatorMessage: "registered by orchestrator",
+-      fundedAmountCents: 0,
+-      status: agent.address.startsWith("local://") ? "running" : "wallet_verified",
+-      createdAt: new Date().toISOString(),
++    const childId = ulid();
++    this.db.runTransaction(() => {
++      this.db.insertChild({
++        id: childId,
++        name: agent.name,
++        address: agent.address as `0x${string}`,
++        sandboxId: agent.sandboxId,
++        genesisPrompt: `Role: ${agent.role}`,
++        creatorMessage: "registered by orchestrator",
++        fundedAmountCents: 0,
++        status: agent.address.startsWith("local://") ? "running" : "wallet_verified",
++        createdAt: new Date().toISOString(),
++      });
++      if (!economyAgentId || !ownerAddress) {
++        throw new Error("Economy identity missing for child registration");
++      }
++      registerNewChildCreationEconomics(this.db, economyAgentId, ownerAddress, childId, agent.address);
+     });
+   }
+ }
+diff --git a/src/replication/genesis.ts b/src/replication/genesis.ts
+index 8178c82..8c9d03f 100644
+--- a/src/replication/genesis.ts
++++ b/src/replication/genesis.ts
+@@ -14,6 +14,8 @@ import type {
+ } from "../types.js";
+ import { DEFAULT_GENESIS_LIMITS } from "../types.js";
+ 
++const ECONOMIC_INHERITANCE_RULE = `\n\n<economic-inheritance>\nThis rule is inherited by every descendant. Creating a child is permitted only when the creating agent has at least EUR 150 of economic value and no unpaid child-creation obligations. Each creation allocates exactly EUR 50 retained by the parent, EUR 50 owed/funded to the new child, and EUR 50 owed/paid to the human owner. Revenue and owner payout are the mission; increasing agent count is never a goal by itself. A descendant must apply the same rule to every child it may later create.\n</economic-inheritance>`;
++
+ /**
+  * Injection patterns to detect and block in genesis params.
+  */
+@@ -102,8 +104,9 @@ export function generateGenesisConfig(
+     genesisPrompt = `${genesisPrompt}\n\n<specialization>\nYou are a specialized child agent. Your specific focus:\n${params.specialization}\n</specialization>`;
+   }
+ 
+-  // Add parent context using XML tags
++  // Add parent context and the immutable economic inheritance rule.
+   genesisPrompt += `\n\n<lineage>\nYou were spawned by ${config.name} (${identity.address}).\nYou inherit their mission but have your own identity and wallet.\n</lineage>`;
++  genesisPrompt += ECONOMIC_INHERITANCE_RULE;
+ 
+   // Enforce genesis prompt length limit
+   if (genesisPrompt.length > DEFAULT_GENESIS_LIMITS.maxGenesisPromptLength) {
+@@ -140,7 +143,7 @@ You are a backup of ${config.name} (${identity.address}).
+ Your parent created you as insurance against their own death.
+ If your parent dies, you carry on their mission.
+ Your parent's creator: ${config.creatorAddress}.
+-</backup-directive>`;
++</backup-directive>${ECONOMIC_INHERITANCE_RULE}`;
+ 
+   const result: GenesisConfig = {
+     name: `${config.name}-backup`,
+@@ -176,7 +179,7 @@ ${task}
+ 
+ When your task is complete, report back to your parent (${identity.address}).
+ If you run out of compute, ask your parent for funding.
+-Be efficient -- complete the task and go to sleep.`;
++Be efficient -- complete the task and go to sleep.${ECONOMIC_INHERITANCE_RULE}`;
+ 
+   const result: GenesisConfig = {
+     name: workerName,
+diff --git a/src/replication/spawn.ts b/src/replication/spawn.ts
+index ecfa548..3f11e7a 100644
+--- a/src/replication/spawn.ts
++++ b/src/replication/spawn.ts
+@@ -17,6 +17,7 @@ import type {
+ import type { ChildLifecycle } from "./lifecycle.js";
+ import { ulid } from "ulid";
+ import { propagateConstitution } from "./constitution.js";
++import { canCreateChildEconomically, registerNewChildCreationEconomics } from "../economy/obligations.js";
+ 
+ /** Valid Conway sandbox pricing tiers. */
+ const SANDBOX_TIERS = [
+@@ -71,20 +72,18 @@ export async function spawnChild(
+   genesis: GenesisConfig,
+   lifecycle?: ChildLifecycle,
+ ): Promise<ChildAutomaton> {
+-  // Check child limit from config
+-  const existing = db
+-    .getChildren()
+-    .filter(
+-      (c) =>
+-        c.status !== "dead" &&
+-        c.status !== "cleaned_up" &&
+-        c.status !== "failed",
+-    );
++  const economyAgentId = db.getIdentity("automatonId") || identity.address;
++  const creationCheck = canCreateChildEconomically(db, economyAgentId);
++  if (!creationCheck.allowed) {
++    throw new Error(`Child creation blocked by economic rule: ${creationCheck.reason}`);
++  }
++
++  // Lifetime child limit: a child with a real identity remains part of the
++  // parent's creation history even if it later stops or fails.
++  const existing = db.getChildren().filter((c) => typeof c.address === "string" && c.address.length > 0);
+   const maxChildren = (db as any).config?.maxChildren ?? 3;
+   if (existing.length >= maxChildren) {
+-    throw new Error(
+-      `Cannot spawn: already at max children (${maxChildren}). Kill or wait for existing children to die.`,
+-    );
++    throw new Error(`Cannot spawn: lifetime child limit reached (${maxChildren}).`);
+   }
+ 
+   const childId = ulid();
+@@ -273,6 +272,14 @@ export async function spawnChild(
+       createdAt: new Date().toISOString(),
+     };
+ 
++    registerNewChildCreationEconomics(
++      db,
++      economyAgentId,
++      genesis.ownerAddress || identity.creatorAddress,
++      childId,
++      childWallet,
++    );
++
+     return child;
+   } catch (error) {
+     // Note: sandbox deletion is disabled by the Conway API (prepaid, non-refundable).
+@@ -380,6 +387,15 @@ async function spawnChildLegacy(
+ 
+     db.insertChild(child);
+ 
++    const economyAgentId = db.getIdentity("automatonId") || identity.address;
++    registerNewChildCreationEconomics(
++      db,
++      economyAgentId,
++      genesis.ownerAddress || identity.creatorAddress,
++      childId,
++      childWallet,
++    );
++
+     db.insertModification({
+       id: ulid(),
+       timestamp: new Date().toISOString(),
+diff --git a/src/state/database.ts b/src/state/database.ts
+index 6f046e4..5a92300 100644
+--- a/src/state/database.ts
++++ b/src/state/database.ts
+@@ -50,6 +50,7 @@ import {
+   MIGRATION_V12,
+   MIGRATION_V13,
+   MIGRATION_V14,
++  MIGRATION_V15,
+ } from "./schema.js";
+ import type {
+   RiskLevel,
+@@ -642,6 +643,7 @@ function applyMigrations(db: DatabaseType): void {
+       apply: () => db.exec(MIGRATION_V13),
+     },
+     { version: 14, apply: () => db.exec(MIGRATION_V14) },
++    { version: 15, apply: () => db.exec(MIGRATION_V15) },
+   ];
+ 
+   for (const m of migrations) {
+diff --git a/src/state/schema.ts b/src/state/schema.ts
+index efa5979..084aacc 100644
+--- a/src/state/schema.ts
++++ b/src/state/schema.ts
+@@ -5,7 +5,7 @@
+  * The database IS the automaton's memory.
+  */
+ 
+-export const SCHEMA_VERSION = 14;
++export const SCHEMA_VERSION = 15;
+ 
+ export const CREATE_TABLES = `
+   -- Schema version tracking
+@@ -721,6 +721,24 @@ export const MIGRATION_V12 = `
+     ON economy_ledger(agent_id, created_at);
+ `;
+ 
++export const MIGRATION_V15 = `
++  CREATE TABLE IF NOT EXISTS economic_obligations (
++    id TEXT PRIMARY KEY,
++    agent_id TEXT NOT NULL,
++    child_id TEXT NOT NULL,
++    beneficiary_type TEXT NOT NULL CHECK(beneficiary_type IN ('owner','child')),
++    beneficiary_ref TEXT NOT NULL,
++    amount_cents INTEGER NOT NULL CHECK(amount_cents > 0),
++    status TEXT NOT NULL DEFAULT 'owed' CHECK(status IN ('owed','paid','waived')),
++    reason TEXT NOT NULL DEFAULT 'child_creation',
++    created_at TEXT NOT NULL DEFAULT (datetime('now')),
++    settled_at TEXT
++  );
++
++  CREATE INDEX IF NOT EXISTS idx_economic_obligations_agent_status
++    ON economic_obligations(agent_id, status, created_at);
++`;
++
+ export const MIGRATION_V14 = `
+   CREATE TABLE IF NOT EXISTS financial_authorization_counts (
+     turn_id TEXT PRIMARY KEY,
