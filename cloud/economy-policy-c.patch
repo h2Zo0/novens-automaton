@@ -1,0 +1,176 @@
+diff --git a/src/orchestration/simple-tracker.ts b/src/orchestration/simple-tracker.ts
+index 600316a..80fcd75 100644
+--- a/src/orchestration/simple-tracker.ts
++++ b/src/orchestration/simple-tracker.ts
+@@ -6,6 +6,7 @@ import type {
+   ConwayClient,
+ } from "../types.js";
+ import type { AgentTracker, FundingProtocol } from "./types.js";
++import { registerNewChildCreationEconomics } from "../economy/obligations.js";
+ 
+ const IDLE_STATUSES = new Set<ChildStatus>(["running", "healthy"]);
+ 
+@@ -68,23 +69,37 @@ export class SimpleAgentTracker implements AgentTracker {
+       (entry) => entry.address === agent.address || entry.sandboxId === agent.sandboxId,
+     );
+ 
++    const economyAgentId = this.db.getIdentity("automatonId") || this.db.getIdentity("address");
++    const economy = economyAgentId ? this.db.getEconomyState(economyAgentId) : undefined;
++    const ownerAddress = economy?.ownerAddress || this.db.getIdentity("creator");
++
+     if (existing) {
+       this.db.raw.prepare(
+         "UPDATE children SET name = ?, role = ?, address = ?, sandbox_id = ? WHERE id = ?",
+       ).run(agent.name, agent.role, agent.address, agent.sandboxId, existing.id);
++      if (economyAgentId && ownerAddress) {
++        registerNewChildCreationEconomics(this.db, economyAgentId, ownerAddress, existing.id, agent.address);
++      }
+       return;
+     }
+ 
+-    this.db.insertChild({
+-      id: ulid(),
+-      name: agent.name,
+-      address: agent.address as `0x${string}`,
+-      sandboxId: agent.sandboxId,
+-      genesisPrompt: `Role: ${agent.role}`,
+-      creatorMessage: "registered by orchestrator",
+-      fundedAmountCents: 0,
+-      status: agent.address.startsWith("local://") ? "running" : "wallet_verified",
+-      createdAt: new Date().toISOString(),
++    const childId = ulid();
++    this.db.runTransaction(() => {
++      this.db.insertChild({
++        id: childId,
++        name: agent.name,
++        address: agent.address as `0x${string}`,
++        sandboxId: agent.sandboxId,
++        genesisPrompt: `Role: ${agent.role}`,
++        creatorMessage: "registered by orchestrator",
++        fundedAmountCents: 0,
++        status: agent.address.startsWith("local://") ? "running" : "wallet_verified",
++        createdAt: new Date().toISOString(),
++      });
++      if (!economyAgentId || !ownerAddress) {
++        throw new Error("Economy identity missing for child registration");
++      }
++      registerNewChildCreationEconomics(this.db, economyAgentId, ownerAddress, childId, agent.address);
+     });
+   }
+ }
+diff --git a/src/replication/genesis.ts b/src/replication/genesis.ts
+index 8178c82..8c9d03f 100644
+--- a/src/replication/genesis.ts
++++ b/src/replication/genesis.ts
+@@ -14,6 +14,8 @@ import type {
+ } from "../types.js";
+ import { DEFAULT_GENESIS_LIMITS } from "../types.js";
+ 
++const ECONOMIC_INHERITANCE_RULE = `\n\n<economic-inheritance>\nThis rule is inherited by every descendant. Creating a child is permitted only when the creating agent has at least EUR 150 of economic value and no unpaid child-creation obligations. Each creation allocates exactly EUR 50 retained by the parent, EUR 50 owed/funded to the new child, and EUR 50 owed/paid to the human owner. Revenue and owner payout are the mission; increasing agent count is never a goal by itself. A descendant must apply the same rule to every child it may later create.\n</economic-inheritance>`;
++
+ /**
+  * Injection patterns to detect and block in genesis params.
+  */
+@@ -102,8 +104,9 @@ export function generateGenesisConfig(
+     genesisPrompt = `${genesisPrompt}\n\n<specialization>\nYou are a specialized child agent. Your specific focus:\n${params.specialization}\n</specialization>`;
+   }
+ 
+-  // Add parent context using XML tags
++  // Add parent context and the immutable economic inheritance rule.
+   genesisPrompt += `\n\n<lineage>\nYou were spawned by ${config.name} (${identity.address}).\nYou inherit their mission but have your own identity and wallet.\n</lineage>`;
++  genesisPrompt += ECONOMIC_INHERITANCE_RULE;
+ 
+   // Enforce genesis prompt length limit
+   if (genesisPrompt.length > DEFAULT_GENESIS_LIMITS.maxGenesisPromptLength) {
+@@ -140,7 +143,7 @@ You are a backup of ${config.name} (${identity.address}).
+ Your parent created you as insurance against their own death.
+ If your parent dies, you carry on their mission.
+ Your parent's creator: ${config.creatorAddress}.
+-</backup-directive>`;
++</backup-directive>${ECONOMIC_INHERITANCE_RULE}`;
+ 
+   const result: GenesisConfig = {
+     name: `${config.name}-backup`,
+@@ -176,7 +179,7 @@ ${task}
+ 
+ When your task is complete, report back to your parent (${identity.address}).
+ If you run out of compute, ask your parent for funding.
+-Be efficient -- complete the task and go to sleep.`;
++Be efficient -- complete the task and go to sleep.${ECONOMIC_INHERITANCE_RULE}`;
+ 
+   const result: GenesisConfig = {
+     name: workerName,
+diff --git a/src/replication/spawn.ts b/src/replication/spawn.ts
+index ecfa548..3f11e7a 100644
+--- a/src/replication/spawn.ts
++++ b/src/replication/spawn.ts
+@@ -17,6 +17,7 @@ import type {
+ import type { ChildLifecycle } from "./lifecycle.js";
+ import { ulid } from "ulid";
+ import { propagateConstitution } from "./constitution.js";
++import { canCreateChildEconomically, registerNewChildCreationEconomics } from "../economy/obligations.js";
+ 
+ /** Valid Conway sandbox pricing tiers. */
+ const SANDBOX_TIERS = [
+@@ -71,20 +72,18 @@ export async function spawnChild(
+   genesis: GenesisConfig,
+   lifecycle?: ChildLifecycle,
+ ): Promise<ChildAutomaton> {
+-  // Check child limit from config
+-  const existing = db
+-    .getChildren()
+-    .filter(
+-      (c) =>
+-        c.status !== "dead" &&
+-        c.status !== "cleaned_up" &&
+-        c.status !== "failed",
+-    );
++  const economyAgentId = db.getIdentity("automatonId") || identity.address;
++  const creationCheck = canCreateChildEconomically(db, economyAgentId);
++  if (!creationCheck.allowed) {
++    throw new Error(`Child creation blocked by economic rule: ${creationCheck.reason}`);
++  }
++
++  // Lifetime child limit: a child with a real identity remains part of the
++  // parent's creation history even if it later stops or fails.
++  const existing = db.getChildren().filter((c) => typeof c.address === "string" && c.address.length > 0);
+   const maxChildren = (db as any).config?.maxChildren ?? 3;
+   if (existing.length >= maxChildren) {
+-    throw new Error(
+-      `Cannot spawn: already at max children (${maxChildren}). Kill or wait for existing children to die.`,
+-    );
++    throw new Error(`Cannot spawn: lifetime child limit reached (${maxChildren}).`);
+   }
+ 
+   const childId = ulid();
+@@ -273,6 +272,14 @@ export async function spawnChild(
+       createdAt: new Date().toISOString(),
+     };
+ 
++    registerNewChildCreationEconomics(
++      db,
++      economyAgentId,
++      genesis.ownerAddress || identity.creatorAddress,
++      childId,
++      childWallet,
++    );
++
+     return child;
+   } catch (error) {
+     // Note: sandbox deletion is disabled by the Conway API (prepaid, non-refundable).
+@@ -380,6 +387,15 @@ async function spawnChildLegacy(
+ 
+     db.insertChild(child);
+ 
++    const economyAgentId = db.getIdentity("automatonId") || identity.address;
++    registerNewChildCreationEconomics(
++      db,
++      economyAgentId,
++      genesis.ownerAddress || identity.creatorAddress,
++      childId,
++      childWallet,
++    );
++
+     db.insertModification({
+       id: ulid(),
+       timestamp: new Date().toISOString(),
