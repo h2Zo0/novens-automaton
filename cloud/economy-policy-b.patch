@@ -1,0 +1,214 @@
+diff --git a/src/agent/loop.ts b/src/agent/loop.ts
+index c57c4eb..85b3370 100644
+--- a/src/agent/loop.ts
++++ b/src/agent/loop.ts
+@@ -66,6 +66,7 @@ import { createWorkerInferenceBridge } from "./worker-inference-bridge.js";
+ import { ProviderRegistry } from "../inference/provider-registry.js";
+ import { UnifiedInferenceClient } from "../inference/inference-client.js";
+ import { isIdleOnlyTool } from "./idle-only-tools.js";
++import { canCreateChildEconomically } from "../economy/obligations.js";
+ 
+ const logger = createLogger("loop");
+ const MAX_TOOL_CALLS_PER_TURN = 10;
+@@ -264,17 +265,26 @@ export async function runAgentLoop(
+         config: {
+           ...config,
+           spawnAgent: async (task: any) => {
+-            // In standalone mode, spawn local workers directly.
++            const economyAgentId = db.getIdentity("automatonId") || identity.address;
++            const creationCheck = canCreateChildEconomically(db, economyAgentId);
++            if (!creationCheck.allowed) {
++              logger.info("[ECONOMY] New child creation refused", {
++                taskId: task.id,
++                reason: creationCheck.reason,
++                economicValueCents: creationCheck.economicValueCents,
++                outstandingCreationDebtCents: creationCheck.debt.totalCents,
++              });
++              return null;
++            }
++
++            // A local worker has no independent funded wallet, so it cannot satisfy
++            // the €50 child-capital rule. In standalone cloud mode the parent must
++            // execute the task itself instead of creating a pseudo-child.
+             if (standaloneMode) {
+-              try {
+-                return initializedWorkerPool.spawn(task);
+-              } catch (localError) {
+-                logger.warn("Failed to spawn local worker", {
+-                  taskId: task.id,
+-                  error: localError instanceof Error ? localError.message : String(localError),
+-                });
+-                return null;
+-              }
++              logger.info("[ECONOMY] Standalone local worker not eligible as a funded child", {
++                taskId: task.id,
++              });
++              return null;
+             }
+ 
+             // Try Conway sandbox spawn first only when Conway is configured.
+@@ -359,22 +369,13 @@ export async function runAgentLoop(
+                 }
+               }
+ 
+-              // Conway sandbox unavailable — fall back to local worker
+-              logger.info("Conway sandbox unavailable, spawning local worker", {
++              // Conway sandbox unavailable: do not create a local substitute.
++              logger.info("Conway child provisioning unavailable; parent will self-execute", {
+                 taskId: task.id,
+                 error: sandboxError instanceof Error ? sandboxError.message : String(sandboxError),
+               });
+ 
+-              try {
+-                const spawned = initializedWorkerPool.spawn(task);
+-                return spawned;
+-              } catch (localError) {
+-                logger.warn("Failed to spawn local worker", {
+-                  taskId: task.id,
+-                  error: localError instanceof Error ? localError.message : String(localError),
+-                });
+-                return null;
+-              }
++              return null;
+             }
+           },
+           startAgent: async (address: string) => {
+diff --git a/src/agent/system-prompt.ts b/src/agent/system-prompt.ts
+index cacfb31..f9eada4 100644
+--- a/src/agent/system-prompt.ts
++++ b/src/agent/system-prompt.ts
+@@ -25,6 +25,7 @@ import { getActiveSkillInstructions } from "../skills/loader.js";
+ import { getLineageSummary } from "../replication/lineage.js";
+ import { sanitizeInput } from "./injection-defense.js";
+ import { loadCurrentSoul } from "../soul/model.js";
++import { getCreationDebtSummary } from "../economy/obligations.js";
+ 
+ function getCoreRules(chainType?: string): string {
+   const usdcNetwork = chainType === "solana" ? "USDC on Solana" : "USDC on Base";
+@@ -133,10 +134,22 @@ environment includes:
+ - Heartbeat: periodic task scheduler that runs while you sleep
+ </environment>
+ 
++<economic_mission>
++Your primary objective is verified external revenue and regular owner payout. Agent count is not a KPI and reproduction is never a goal by itself.
++
++A new child may be created only when ALL conditions are true:
++- the parent has at least €150 of economic value available;
++- all prior child-creation obligations are fully settled;
++- the maxChildren limit has not been reached;
++- the child has an independent fundable wallet or account able to receive its starting capital.
++
++For every valid child creation, the economics are fixed: €50 belongs to the owner, €50 is starting capital owed to the child, and the parent must retain at least €50. If any part cannot be funded or recorded, do not create the child. Existing children and past mistakes must remain recorded and must not be erased to evade obligations.
++
++Until child creation is economically permitted, execute work with the parent itself. Prefer actions that create measurable external revenue and preserve capital. Never optimize for network size, bot count, or synthetic internal transfers.
++</economic_mission>
++
+ <orchestration>
+-You are the parent orchestrator of an autonomous agent colony. You do not just execute
+-tasks yourself — you decompose goals into task graphs, spawn specialist child agents,
+-assign work, collect results, and manage the colony as a coherent operation.
++You are the parent orchestrator of an autonomous economic operation. Delegate only when the economic child-creation rules permit it; otherwise execute the task yourself while keeping the same planning and audit discipline.
+ 
+ <capabilities>
+ You CAN:
+@@ -389,10 +402,12 @@ Before EVERY orchestration action, verify:
+ 5. Are all dependencies actually complete (check DB, not memory)?
+ 
+ Before spawning ANY child agent:
+-1. Check current active agent count against maxChildren config
+-2. Confirm credit budget covers the task's estimated cost
+-3. Prepare the task assignment message BEFORE spawning
+-4. Verify the requested role is valid (predefined or custom-defined in the plan)
++1. Confirm the parent has reached the economic deployment threshold; otherwise do not delegate to a new worker
++2. Treat real external profit and owner payout as the primary objective; growth in agent count is never an objective by itself
++3. Check current active agent count against maxChildren config
++4. Confirm credit budget covers the task's estimated cost
++5. Prepare the task assignment message BEFORE spawning
++6. Verify the requested role is valid (predefined or custom-defined in the plan)
+ </pre_action_mandates>
+ </orchestration>
+ 
+@@ -451,16 +466,12 @@ DECISION TREE (follow on EVERY turn):
+    - Or cancel_goal and try a different approach.
+ 
+ CRITICAL RULES FOR EVERY TURN:
+-- You are a PARENT ORCHESTRATOR, not a solo worker. For any nontrivial task,
+-  you MUST call create_goal and let the orchestrator handle it.
+-- DO NOT write code yourself — create_goal and let an engineer agent do it.
+-- DO NOT research manually — create_goal and let a researcher agent do it.
+-- DO NOT deploy services yourself — create_goal and let a devops agent do it.
+-- The ONLY work you do directly is: goal creation (create_goal), strategy decisions,
+-  monitoring (list_goals, orchestrator_status), credit management, and creator
+-  communication.
+-- If you catch yourself starting to "do the work" instead of delegating it,
+-  STOP. Call create_goal. Let the planner decompose it. Let child agents execute.
++- Use create_goal for nontrivial work so the plan and audit trail remain explicit.
++- If economic child creation is not permitted, the parent executes the resulting tasks itself; do not attempt to create a substitute child or local worker.
++- Delegation is optional and subordinate to the €150 / €50 owner / €50 child rule.
++- Real external revenue and owner payout take priority over expansion.
++- Never create agents merely to increase capacity, activity counters, or network size.
++- Existing failed or stopped children remain part of the economic history and cannot be erased to reset child limits or obligations.
+ 
+ WHEN TO WORK SOLO (exceptions — do NOT create a goal for these):
+ - Trivial tasks (1-3 steps) that don't need planning
+@@ -675,6 +686,16 @@ Your chain type is ${chainType}.`,
+   const registryEntry = db.getRegistryEntry();
+   const children = db.getChildren();
+   const lineageSummary = getLineageSummary(db, config);
++  const economyAgentId = db.getIdentity("automatonId") || identity.address;
++  let creationDebtLine = "";
++  try {
++    const debt = getCreationDebtSummary(db, economyAgentId);
++    if (debt.totalCents > 0) {
++      creationDebtLine = `\nChild-creation debt: owner €${(debt.ownerCents / 100).toFixed(2)} + children €${(debt.childCents / 100).toFixed(2)} = €${(debt.totalCents / 100).toFixed(2)} outstanding. No new child may be created until this is settled.`;
++    }
++  } catch {
++    // Older databases may not have the obligation table yet.
++  }
+ 
+   // Build upstream status line from cached KV
+   let upstreamLine = "";
+@@ -736,7 +757,7 @@ Recent self-modifications: ${recentMods.length}
+ Inference model: ${config.inferenceModel}
+ ERC-8004 Agent ID: ${registryEntry?.agentId || "not registered"}
+ Children: ${children.filter((c) => c.status !== "dead").length} alive / ${children.length} total
+-Lineage: ${lineageSummary}${upstreamLine}
++Lineage: ${lineageSummary}${creationDebtLine}${upstreamLine}
+ --- END STATUS ---`,
+   );
+ 
+diff --git a/src/dashboard/server.ts b/src/dashboard/server.ts
+index 229d0b0..01567ee 100644
+--- a/src/dashboard/server.ts
++++ b/src/dashboard/server.ts
+@@ -16,6 +16,8 @@ import { fileURLToPath } from 'node:url';
+ import { randomBytes, timingSafeEqual } from 'node:crypto';
+ import { getWalletAddress, getAutomatonDir } from '../identity/wallet.js';
+ import { DashboardError, DashboardStore, readRuntime, publicAddress, updateRuntimeOwner } from './model.js';
++import { createDatabase } from '../state/database.js';
++import { reconcileHistoricalChildCreationEconomics } from '../economy/obligations.js';
+ 
+ export interface ServerOptions { balanceMonitor?: BalanceMonitor; secondaryBalanceMonitor?: BalanceMonitor; stateFile: string; configFile: string; dbFile: string; publicDir: string; getAddress: () => string | null }
+ export function createDashboardServer(options: ServerOptions) {
+@@ -226,7 +228,20 @@ if(process.argv[1] && path.resolve(process.argv[1])===fileURLToPath(import.meta.
+   const root=getAutomatonDir();
+   const configFile=path.join(root,'automaton.json');
+   let dbFile=path.join(root,'state.db');
+-  if(fs.existsSync(configFile)) { const config=JSON.parse(fs.readFileSync(configFile,'utf8')); if(typeof config.dbPath==='string') dbFile=config.dbPath.startsWith('~/')?path.join(process.env.HOME || '',config.dbPath.slice(2)):path.resolve(config.dbPath); }
++  let runtimeConfig: Record<string, unknown> = {};
++  if(fs.existsSync(configFile)) { runtimeConfig=JSON.parse(fs.readFileSync(configFile,'utf8')); if(typeof runtimeConfig.dbPath==='string') dbFile=runtimeConfig.dbPath.startsWith('~/')?path.join(process.env.HOME || '',runtimeConfig.dbPath.slice(2)):path.resolve(runtimeConfig.dbPath); }
++  try {
++    const writableDb=createDatabase(dbFile);
++    const agentId=writableDb.getIdentity('automatonId') || writableDb.getIdentity('address');
++    const owner=publicAddress(runtimeConfig.ownerAddress) || publicAddress(runtimeConfig.creatorAddress) || writableDb.getIdentity('creator') || '';
++    if(agentId && owner) {
++      const debt=reconcileHistoricalChildCreationEconomics(writableDb,agentId,owner);
++      console.log(`[NOVENS ECONOMY] obligations owner=€${(debt.ownerCents/100).toFixed(2)} children=€${(debt.childCents/100).toFixed(2)} total=€${(debt.totalCents/100).toFixed(2)}`);
++    }
++    writableDb.close();
++  } catch(error) {
++    console.warn('[NOVENS ECONOMY] obligation reconciliation failed:', error instanceof Error ? error.message : String(error));
++  }
+   const secondaryBalanceMonitor = new BalanceMonitor(getWalletAddress, address => getUsdcBalanceDetailed(address as `0x${string}`, "eip155:8453"));
+   // Public clients only: no account, signer, transaction or financial configuration change.
+   const ethereum = createPublicClient({chain: mainnet, transport: fallback([
