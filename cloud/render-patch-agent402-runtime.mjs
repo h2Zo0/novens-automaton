@@ -119,7 +119,7 @@ function write(file, content) { fs.writeFileSync(file, content); }
     '            log(config, "[AGENT402 GATE] Recent reasoning already purchased for task " + reasoningTask.id + "; deterministic cooldown.");',
     "            const cooldownRemainingMs = Math.max(250, reasoningCooldownMs - (Date.now() - previousReasoningAt));",
     '            db.setKV("sleep_until", new Date(Date.now() + cooldownRemainingMs).toISOString());',
-    '            log(config, "[AGENT402 GATE] Yielding until reasoning cooldown expires in " + cooldownRemainingMs + "ms.");'
+    '            log(config, "[AGENT402 GATE] Yielding until reasoning cooldown expires in " + cooldownRemainingMs + "ms.");',
     "          }",
     "          if (reasoningTask?.id) {",
     '            db.setKV("reasoning_required.task_id", String(reasoningTask.id));',
