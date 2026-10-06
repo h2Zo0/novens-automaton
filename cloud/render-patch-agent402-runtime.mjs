@@ -93,14 +93,14 @@ function write(file, content) { fs.writeFileSync(file, content); }
     "          reasoningTask = undefined;",
     "        }",
     "",
-    '        const agent402Ready = process.env.NOVENS_AGENT402_ENABLED === "1";
-        const previousReasoningTask = db.getKV("reasoning_required.task_id");
-        const previousReasoningAt = Number(db.getKV("reasoning_required.at_ms") || "0");
-        const reasoningCooldownMs = 15_000;
-        const duplicateReasoning = Boolean(
-          reasoningTask?.id && previousReasoningTask === String(reasoningTask.id) &&
-          Number.isFinite(previousReasoningAt) && Date.now() - previousReasoningAt < reasoningCooldownMs
-        );',
+    '        const agent402Ready = process.env.NOVENS_AGENT402_ENABLED === "1";',
+    '        const previousReasoningTask = db.getKV("reasoning_required.task_id");',
+    '        const previousReasoningAt = Number(db.getKV("reasoning_required.at_ms") || "0");',
+    "        const reasoningCooldownMs = 15_000;",
+    "        const duplicateReasoning = Boolean(",
+    "          reasoningTask?.id && previousReasoningTask === String(reasoningTask.id) &&",
+    "          Number.isFinite(previousReasoningAt) && Date.now() - previousReasoningAt < reasoningCooldownMs",
+    "        );',
     "",
     "        if (reasoningTask?.id && agent402Ready && !duplicateReasoning) {",
     '          db.setKV("reasoning_required.task_id", String(reasoningTask.id));
