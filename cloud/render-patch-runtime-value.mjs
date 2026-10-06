@@ -124,7 +124,7 @@ fs.writeFileSync(
       "export function buildValueFirstSystemPrompt",
       "const NOVENS_AUTOMATON_COMPLETE_RULESET = " +
         JSON.stringify(completeRuleset) +
-        ";\\n\\nexport function buildValueFirstSystemPrompt",
+        ";\n\nexport function buildValueFirstSystemPrompt",
     );
 
     valuePromptSource = valuePromptSource.replace(
