@@ -44,6 +44,7 @@ const PROTECTED_FILES: readonly string[] = Object.freeze([
   "state.db-shm",
   // Constitution (immutable, propagated to children)
   "constitution.md",
+  "NOVENS_AUTOMATON_RULESET.md",
   // Defense infrastructure (the agent must not modify its own guardrails)
   "injection-defense.ts",
   "injection-defense.js",
