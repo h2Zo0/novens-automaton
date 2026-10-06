@@ -455,3 +455,5 @@ await import("./render-patch-compact-tool-schemas.mjs");
 await import("./render-patch-deterministic-complexity.mjs");
 
 await import("./render-patch-runtime-scroll.mjs");
+
+await import("./render-patch-runtime-intent.mjs");
