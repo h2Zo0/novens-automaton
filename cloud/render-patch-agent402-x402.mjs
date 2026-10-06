@@ -107,3 +107,27 @@ if (!src.includes('paidResp.headers.get("PAYMENT-RESPONSE")')) {
 
 fs.writeFileSync(file, src);
 console.log("[NOVENS CLOUD] x402 v2 Agent402 payment compatibility applied.");
+
+
+// NOVENS_AGENT402_BASE_RPC_V1
+{
+  const file = "src/conway/x402.ts";
+  let src = fs.readFileSync(file, "utf8");
+  const from = '    const rpcUrl = process.env.AUTOMATON_RPC_URL || undefined;';
+  const to = [
+    '    // NOVENS x402 balance reads must use the RPC for the network being queried.',
+    '    // A generic AUTOMATON_RPC_URL may point at another EVM chain and must not',
+    '    // be interpreted as a valid zero balance on Base.',
+    '    const rpcUrl =',
+    '      network === "eip155:8453"',
+    '        ? (process.env.BASE_RPC_URL || undefined)',
+    '        : network === "eip155:84532"',
+    '          ? (process.env.BASE_SEPOLIA_RPC_URL || undefined)',
+    '          : undefined;'
+  ].join("\\n");
+  if (!src.includes(to)) {
+    if (!src.includes(from)) throw new Error("Base RPC selection target missing");
+    src = src.replace(from, to);
+  }
+  fs.writeFileSync(file, src);
+}
