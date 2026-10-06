@@ -7,6 +7,9 @@ tar() {
   if [ -f cloud/local-sync.patch.b64 ]; then
     base64 -d cloud/local-sync.patch.b64 | git apply --whitespace=nowarn - || return $?
   fi
+  [ -f cloud/value-first-a.patch ] && git apply --whitespace=nowarn cloud/value-first-a.patch || return $?
+  [ -f cloud/value-first-b.patch ] && git apply --whitespace=nowarn cloud/value-first-b.patch || return $?
+  [ -f cloud/value-first-c.patch ] && git apply --whitespace=nowarn cloud/value-first-c.patch || return $?
   [ -f cloud/render-patch-auth.mjs ] && node cloud/render-patch-auth.mjs || return $?
   [ -f cloud/render-patch-portfolio.mjs ] && node cloud/render-patch-portfolio.mjs || return $?
   [ -f cloud/render-patch-git-mirror.mjs ] && node cloud/render-patch-git-mirror.mjs || return $?
