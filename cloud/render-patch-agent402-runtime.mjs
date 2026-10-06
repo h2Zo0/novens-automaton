@@ -100,11 +100,11 @@ function write(file, content) { fs.writeFileSync(file, content); }
     "        const duplicateReasoning = Boolean(",
     "          reasoningTask?.id && previousReasoningTask === String(reasoningTask.id) &&",
     "          Number.isFinite(previousReasoningAt) && Date.now() - previousReasoningAt < reasoningCooldownMs",
-    "        );',
+    "        );",
     "",
     "        if (reasoningTask?.id && agent402Ready && !duplicateReasoning) {",
-    '          db.setKV("reasoning_required.task_id", String(reasoningTask.id));
-          db.setKV("reasoning_required.at_ms", String(Date.now()));',
+    '          db.setKV("reasoning_required.task_id", String(reasoningTask.id));',
+    '          db.setKV("reasoning_required.at_ms", String(Date.now()));',
     "          db.setKV(",
     '            "reasoning_required.reason",',
     '            "Parent task needs semantic/generative execution; route through self-funded Agent402.",',
@@ -115,10 +115,10 @@ function write(file, content) { fs.writeFileSync(file, content); }
     "          );",
     "          // Continue into the normal inference/tool path.",
     "        } else {",
-    "          if (duplicateReasoning && reasoningTask?.id) {
-            log(config, "[AGENT402 GATE] Recent reasoning already purchased for task " + reasoningTask.id + "; deterministic cooldown.");
-          }
-          if (reasoningTask?.id) {",
+    "          if (duplicateReasoning && reasoningTask?.id) {",
+    '            log(config, "[AGENT402 GATE] Recent reasoning already purchased for task " + reasoningTask.id + "; deterministic cooldown.");',
+    "          }",
+    "          if (reasoningTask?.id) {"
     '            db.setKV("reasoning_required.task_id", String(reasoningTask.id));',
     "            db.setKV(",
     '              "reasoning_required.reason",',
