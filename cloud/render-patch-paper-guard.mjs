@@ -472,4 +472,3 @@ await import("./render-patch-never-stop.mjs");
 
 await import("./render-patch-validation-telemetry.mjs");
 
-await import("./render-patch-agent402-compact-context.mjs");
