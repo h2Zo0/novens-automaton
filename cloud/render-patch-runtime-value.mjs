@@ -1,5 +1,3 @@
-[Reading 146 lines from start (total: 146 lines, 0 remaining)]
-
 import fs from "node:fs";
 
 function replaceOnce(file, from, to) {
@@ -146,5 +144,3 @@ replaceOnce(
 );
 
 console.log("[NOVENS CLOUD] Git dedupe + Daytona value execution patch applied.");
-
-[executed on device: Mac.lan (70fd6287-e3d6-4d7c-82ac-8806af4ad277)]
