@@ -49,7 +49,7 @@ replaceOnce(
           db.deleteKV("value_guard.hold_until");
           db.deleteKV("value_guard.reason");
           db.deleteKV("value_guard.economic_value_cents");
-          valueHoldUntilRaw = null;
+          valueHoldUntilRaw = undefined;
           logger.info(
             "[VALUE CONTINUE] Runnable parent work exists; stale VALUE HOLD released.",
           );
