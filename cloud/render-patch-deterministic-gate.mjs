@@ -1,172 +1,26 @@
 import fs from "node:fs";
 
-function replaceOnce(file, from, to) {
+function decode(s) {
+  return Buffer.from(s, "base64").toString("utf8");
+}
+
+function replaceOnce(file, from64, to64) {
+  const from = decode(from64);
+  const to = decode(to64);
   const src = fs.readFileSync(file, "utf8");
   if (src.includes(to)) return;
   if (!src.includes(from)) throw new Error("NOVENS deterministic-gate patch target not found in " + file);
   fs.writeFileSync(file, src.replace(from, to));
 }
 
-replaceOnce(
-  "src/agent/loop.ts",
-  `import path from "node:path";`,
-  `import path from "node:path";
-import { createHash } from "node:crypto";`
-);
+replaceOnce("src/agent/loop.ts", "aW1wb3J0IHBhdGggZnJvbSAibm9kZTpwYXRoIjs=", "aW1wb3J0IHBhdGggZnJvbSAibm9kZTpwYXRoIjsKaW1wb3J0IHsgY3JlYXRlSGFzaCB9IGZyb20gIm5vZGU6Y3J5cHRvIjs=");
 
-replaceOnce(
-  "src/agent/loop.ts",
-  `    // Declared outside try so the catch block can access for retry/failure handling
-    let claimedMessages: InboxMessageRow[] = [];
+replaceOnce("src/agent/loop.ts", "ICAgIC8vIERlY2xhcmVkIG91dHNpZGUgdHJ5IHNvIHRoZSBjYXRjaCBibG9jayBjYW4gYWNjZXNzIGZvciByZXRyeS9mYWlsdXJlIGhhbmRsaW5nCiAgICBsZXQgY2xhaW1lZE1lc3NhZ2VzOiBJbmJveE1lc3NhZ2VSb3dbXSA9IFtdOwoKICAgIHRyeSB7", "ICAgIC8vIERlY2xhcmVkIG91dHNpZGUgdHJ5IHNvIHRoZSBjYXRjaCBibG9jayBjYW4gYWNjZXNzIGZvciByZXRyeS9mYWlsdXJlIGhhbmRsaW5nCiAgICBsZXQgY2xhaW1lZE1lc3NhZ2VzOiBJbmJveE1lc3NhZ2VSb3dbXSA9IFtdOwogICAgLy8gU25hcHNob3QgdXNlZCBieSB0aGUgZGV0ZXJtaW5pc3RpYyBMTE0gZ2F0ZS4gSXQgaXMgcGVyc2lzdGVkIG9ubHkgYWZ0ZXIKICAgIC8vIGEgc3VjY2Vzc2Z1bCB0dXJuIHNvIGluZmVyZW5jZSBlcnJvcnMgcmVtYWluIHJldHJ5YWJsZS4KICAgIGxldCBsbG1HYXRlRmluZ2VycHJpbnQ6IHN0cmluZyB8IG51bGwgPSBudWxsOwoKICAgIHRyeSB7");
 
-    try {`,
-  `    // Declared outside try so the catch block can access for retry/failure handling
-    let claimedMessages: InboxMessageRow[] = [];
-    // Snapshot used by the deterministic LLM gate. It is persisted only after
-    // a successful turn so inference errors remain retryable.
-    let llmGateFingerprint: string | null = null;
+replaceOnce("src/agent/loop.ts", "ICAgICAgLy8gQ2FwdHVyZSBpbnB1dCBiZWZvcmUgY2xlYXJpbmcKICAgICAgY29uc3QgY3VycmVudElucHV0ID0gcGVuZGluZ0lucHV0OwoKICAgICAgLy8gQ2xlYXIgcGVuZGluZyBpbnB1dCBhZnRlciB1c2UKICAgICAgcGVuZGluZ0lucHV0ID0gdW5kZWZpbmVkOwo=", "ICAgICAgLy8gRGV0ZXJtaW5pc3RpYyBMTE0gZ2F0ZTogYXV0b21hdGljIHdha2V1cHMgd2l0aCBubyByZWxldmFudCBzdGF0ZQogICAgICAvLyBjaGFuZ2UgbXVzdCBub3Qgc3BlbmQgaW5mZXJlbmNlIG1lcmVseSBiZWNhdXNlIHRoZSBwcm9jZXNzIGlzIGFsaXZlLgogICAgICAvLyBFeHRlcm5hbC91c2VyL2FnZW50IGlucHV0cyBhbHdheXMgYnlwYXNzIHRoaXMgZ2F0ZS4KICAgICAgbGxtR2F0ZUZpbmdlcnByaW50ID0gYnVpbGRMbG1HYXRlRmluZ2VycHJpbnQoZGIsIGlkZW50aXR5LmFkZHJlc3MsIGZpbmFuY2lhbCk7CiAgICAgIGNvbnN0IGF1dG9tYXRpY1dha2UgPSAhcGVuZGluZ0lucHV0IHx8IHBlbmRpbmdJbnB1dC5zb3VyY2UgPT09ICJ3YWtldXAiOwogICAgICBjb25zdCBwcmV2aW91c0luZmVyZW5jZVN0YXRlID0gZGIuZ2V0S1YoImxsbV9nYXRlLmxhc3RfaW5mZXJlbmNlX3N0YXRlIik7CgogICAgICBpZiAoYXV0b21hdGljV2FrZSAmJiBwcmV2aW91c0luZmVyZW5jZVN0YXRlID09PSBsbG1HYXRlRmluZ2VycHJpbnQpIHsKICAgICAgICBjb25zdCBza2lwcGVkID0gTnVtYmVyLnBhcnNlSW50KGRiLmdldEtWKCJsbG1fZ2F0ZS5za2lwcGVkIikgfHwgIjAiLCAxMCk7CiAgICAgICAgZGIuc2V0S1YoImxsbV9nYXRlLnNraXBwZWQiLCBTdHJpbmcoTnVtYmVyLmlzRmluaXRlKHNraXBwZWQpID8gc2tpcHBlZCArIDEgOiAxKSk7CiAgICAgICAgbG9nKAogICAgICAgICAgY29uZmlnLAogICAgICAgICAgIltMTE0gR0FURV0gVW5jaGFuZ2VkIGRlY2lzaW9uIHN0YXRlLiBTa2lwcGluZyBpbmZlcmVuY2U7IHJ1bnRpbWUgcmVtYWlucyBldmVudC1kcml2ZW4uIiwKICAgICAgICApOwogICAgICAgIGRiLnNldEtWKCJzbGVlcF91bnRpbCIsIG5ldyBEYXRlKERhdGUubm93KCkgKyA2MF8wMDApLnRvSVNPU3RyaW5nKCkpOwogICAgICAgIGRiLnNldEFnZW50U3RhdGUoInNsZWVwaW5nIik7CiAgICAgICAgb25TdGF0ZUNoYW5nZT8uKCJzbGVlcGluZyIpOwogICAgICAgIHJ1bm5pbmcgPSBmYWxzZTsKICAgICAgICBicmVhazsKICAgICAgfQoKICAgICAgLy8gQ2FwdHVyZSBpbnB1dCBiZWZvcmUgY2xlYXJpbmcKICAgICAgY29uc3QgY3VycmVudElucHV0ID0gcGVuZGluZ0lucHV0OwoKICAgICAgLy8gQ2xlYXIgcGVuZGluZyBpbnB1dCBhZnRlciB1c2UKICAgICAgcGVuZGluZ0lucHV0ID0gdW5kZWZpbmVkOwo=");
 
-    try {`
-);
+replaceOnce("src/agent/loop.ts", "ICAgICAgb25UdXJuQ29tcGxldGU/Lih0dXJuKTsKCiAgICAgIC8vIFBoYXNlIDIuMjogUG9zdC10dXJuIG1lbW9yeSBpbmdlc3Rpb24gKG5vbi1ibG9ja2luZykK", "ICAgICAgb25UdXJuQ29tcGxldGU/Lih0dXJuKTsKCiAgICAgIC8vIFBlcnNpc3QgdGhlIGV4YWN0IGRldGVybWluaXN0aWMgc3RhdGUgZm9yIHdoaWNoIGluZmVyZW5jZSB3YXMganVzdAogICAgICAvLyBwZXJmb3JtZWQuIEEgbGF0ZXIgYXV0b21hdGljIHdha2UgY2FuIHJldXNlIHRoaXMgZGVjaXNpb24gb25seSB3aGlsZQogICAgICAvLyBhbGwgcmVsZXZhbnQgc3RhdGUgcmVtYWlucyB1bmNoYW5nZWQuCiAgICAgIGlmIChsbG1HYXRlRmluZ2VycHJpbnQpIHsKICAgICAgICBkYi5zZXRLVigibGxtX2dhdGUubGFzdF9pbmZlcmVuY2Vfc3RhdGUiLCBsbG1HYXRlRmluZ2VycHJpbnQpOwogICAgICAgIGNvbnN0IGFsbG93ZWQgPSBOdW1iZXIucGFyc2VJbnQoZGIuZ2V0S1YoImxsbV9nYXRlLmFsbG93ZWQiKSB8fCAiMCIsIDEwKTsKICAgICAgICBkYi5zZXRLVigibGxtX2dhdGUuYWxsb3dlZCIsIFN0cmluZyhOdW1iZXIuaXNGaW5pdGUoYWxsb3dlZCkgPyBhbGxvd2VkICsgMSA6IDEpKTsKICAgICAgfQoKICAgICAgLy8gQSBzdWNjZXNzZnVsIG5vbi1pZGxlIHRvb2wgY2FsbCBpcyBjb25jcmV0ZSBwcm9ncmVzcyBldmVuIHdoZW4gdGhlCiAgICAgIC8vIHRhc2sgcm93IGl0c2VsZiBoYXMgbm90IGNoYW5nZWQgeWV0IChmb3IgZXhhbXBsZSBhIERheXRvbmEgZXhlYyBvcgogICAgICAvLyBmaWxlIHdyaXRlKS4gQnVtcCBhIGRldGVybWluaXN0aWMgc2VxdWVuY2Ugc28gdGhlIG5leHQgcmVhc29uaW5nIHN0ZXAKICAgICAgLy8gaXMgYWxsb3dlZCB0byBjb250aW51ZSB0aGUgc2FtZSByZWFsIHRhc2suCiAgICAgIGlmICgKICAgICAgICB0dXJuLnRvb2xDYWxscy5zb21lKAogICAgICAgICAgKHRjKSA9PiAhdGMuZXJyb3IgJiYgIWlzSWRsZU9ubHlUb29sKHRjLm5hbWUpLAogICAgICAgICkKICAgICAgKSB7CiAgICAgICAgY29uc3QgcHJldmlvdXNQcm9ncmVzcyA9IE51bWJlci5wYXJzZUludCgKICAgICAgICAgIGRiLmdldEtWKCJsbG1fZ2F0ZS5wcm9ncmVzc19zZXEiKSB8fCAiMCIsCiAgICAgICAgICAxMCwKICAgICAgICApOwogICAgICAgIGRiLnNldEtWKAogICAgICAgICAgImxsbV9nYXRlLnByb2dyZXNzX3NlcSIsCiAgICAgICAgICBTdHJpbmcoTnVtYmVyLmlzRmluaXRlKHByZXZpb3VzUHJvZ3Jlc3MpID8gcHJldmlvdXNQcm9ncmVzcyArIDEgOiAxKSwKICAgICAgICApOwogICAgICB9CgogICAgICAvLyBQaGFzZSAyLjI6IFBvc3QtdHVybiBtZW1vcnkgaW5nZXN0aW9uIChub24tYmxvY2tpbmcpCg==");
 
-replaceOnce(
-  "src/agent/loop.ts",
-  `      // Capture input before clearing
-      const currentInput = pendingInput;
-
-      // Clear pending input after use
-      pendingInput = undefined;
-`,
-  `      // Deterministic LLM gate: automatic wakeups with no relevant state
-      // change must not spend inference merely because the process is alive.
-      // External/user/agent inputs always bypass this gate.
-      llmGateFingerprint = buildLlmGateFingerprint(db, identity.address, financial);
-      const automaticWake = !pendingInput || pendingInput.source === "wakeup";
-      const previousInferenceState = db.getKV("llm_gate.last_inference_state");
-
-      if (automaticWake && previousInferenceState === llmGateFingerprint) {
-        const skipped = Number.parseInt(db.getKV("llm_gate.skipped") || "0", 10);
-        db.setKV("llm_gate.skipped", String(Number.isFinite(skipped) ? skipped + 1 : 1));
-        log(
-          config,
-          `[LLM GATE] Unchanged decision state. Skipping inference; runtime remains event-driven.`,
-        );
-        db.setKV("sleep_until", new Date(Date.now() + 60_000).toISOString());
-        db.setAgentState("sleeping");
-        onStateChange?.("sleeping");
-        running = false;
-        break;
-      }
-
-      // Capture input before clearing
-      const currentInput = pendingInput;
-
-      // Clear pending input after use
-      pendingInput = undefined;
-`
-);
-
-replaceOnce(
-  "src/agent/loop.ts",
-  `      onTurnComplete?.(turn);
-
-      // Phase 2.2: Post-turn memory ingestion (non-blocking)
-`,
-  `      onTurnComplete?.(turn);
-
-      // Persist the exact deterministic state for which inference was just
-      // performed. A later automatic wake can reuse this decision only while
-      // all relevant state remains unchanged.
-      if (llmGateFingerprint) {
-        db.setKV("llm_gate.last_inference_state", llmGateFingerprint);
-        const allowed = Number.parseInt(db.getKV("llm_gate.allowed") || "0", 10);
-        db.setKV("llm_gate.allowed", String(Number.isFinite(allowed) ? allowed + 1 : 1));
-      }
-
-      // A successful non-idle tool call is concrete progress even when the
-      // task row itself has not changed yet (for example a Daytona exec or
-      // file write). Bump a deterministic sequence so the next reasoning step
-      // is allowed to continue the same real task.
-      if (
-        turn.toolCalls.some(
-          (tc) => !tc.error && !isIdleOnlyTool(tc.name),
-        )
-      ) {
-        const previousProgress = Number.parseInt(
-          db.getKV("llm_gate.progress_seq") || "0",
-          10,
-        );
-        db.setKV(
-          "llm_gate.progress_seq",
-          String(Number.isFinite(previousProgress) ? previousProgress + 1 : 1),
-        );
-      }
-
-      // Phase 2.2: Post-turn memory ingestion (non-blocking)
-`
-);
-
-replaceOnce(
-  "src/agent/loop.ts",
-  `function log(_config: AutomatonConfig, message: string): void {
-  logger.info(message);
-}
-`,
-  `function buildLlmGateFingerprint(
-  db: AutomatonDatabase,
-  identityAddress: string,
-  financial: FinancialState,
-): string {
-  const snapshot: Record<string, unknown> = {
-    // A manual START/new runtime process must always be able to perform one
-    // initial reasoning turn even if the persisted business state is unchanged.
-    processPid: process.pid,
-    identityAddress,
-    creditsCents: financial.creditsCents,
-    usdcCents: Math.round(financial.usdcBalance * 100),
-    progressSeq: db.getKV("llm_gate.progress_seq") || "0",
-    valueHoldUntil: db.getKV("value_guard.hold_until") || "",
-    valueHoldReason: db.getKV("value_guard.reason") || "",
-    economicValueCents: db.getKV("value_guard.economic_value_cents") || "",
-    upstreamRemoteHead: db.getKV("upstream_seen_remote_head") || "",
-  };
-
-  try {
-    snapshot.activeGoals = db.raw.prepare(
-      `SELECT id, status, COALESCE(strategy, '') AS strategy
-       FROM goals
-       WHERE status = 'active'
-       ORDER BY created_at ASC, id ASC`,
-    ).all();
-  } catch {
-    snapshot.activeGoals = [];
-  }
-
-  try {
-    snapshot.tasks = db.raw.prepare(
-      `SELECT id, goal_id, status,
-              COALESCE(assigned_to, '') AS assigned_to,
-              retry_count,
-              COALESCE(started_at, '') AS started_at,
-              COALESCE(completed_at, '') AS completed_at,
-              COALESCE(result, '') AS result
-       FROM task_graph
-       WHERE status IN ('pending', 'assigned', 'running', 'blocked', 'failed')
-       ORDER BY goal_id ASC, id ASC`,
-    ).all();
-  } catch {
-    snapshot.tasks = [];
-  }
-
-  return createHash("sha256")
-    .update(JSON.stringify(snapshot))
-    .digest("hex");
-}
-
-function log(_config: AutomatonConfig, message: string): void {
-  logger.info(message);
-}
-`
-);
+replaceOnce("src/agent/loop.ts", "ZnVuY3Rpb24gbG9nKF9jb25maWc6IEF1dG9tYXRvbkNvbmZpZywgbWVzc2FnZTogc3RyaW5nKTogdm9pZCB7CiAgbG9nZ2VyLmluZm8obWVzc2FnZSk7Cn0K", "ZnVuY3Rpb24gYnVpbGRMbG1HYXRlRmluZ2VycHJpbnQoCiAgZGI6IEF1dG9tYXRvbkRhdGFiYXNlLAogIGlkZW50aXR5QWRkcmVzczogc3RyaW5nLAogIGZpbmFuY2lhbDogRmluYW5jaWFsU3RhdGUsCik6IHN0cmluZyB7CiAgY29uc3Qgc25hcHNob3Q6IFJlY29yZDxzdHJpbmcsIHVua25vd24+ID0gewogICAgLy8gQSBtYW51YWwgU1RBUlQvbmV3IHJ1bnRpbWUgcHJvY2VzcyBtdXN0IGFsd2F5cyBiZSBhYmxlIHRvIHBlcmZvcm0gb25lCiAgICAvLyBpbml0aWFsIHJlYXNvbmluZyB0dXJuIGV2ZW4gaWYgdGhlIHBlcnNpc3RlZCBidXNpbmVzcyBzdGF0ZSBpcyB1bmNoYW5nZWQuCiAgICBwcm9jZXNzUGlkOiBwcm9jZXNzLnBpZCwKICAgIGlkZW50aXR5QWRkcmVzcywKICAgIGNyZWRpdHNDZW50czogZmluYW5jaWFsLmNyZWRpdHNDZW50cywKICAgIHVzZGNDZW50czogTWF0aC5yb3VuZChmaW5hbmNpYWwudXNkY0JhbGFuY2UgKiAxMDApLAogICAgcHJvZ3Jlc3NTZXE6IGRiLmdldEtWKCJsbG1fZ2F0ZS5wcm9ncmVzc19zZXEiKSB8fCAiMCIsCiAgICB2YWx1ZUhvbGRVbnRpbDogZGIuZ2V0S1YoInZhbHVlX2d1YXJkLmhvbGRfdW50aWwiKSB8fCAiIiwKICAgIHZhbHVlSG9sZFJlYXNvbjogZGIuZ2V0S1YoInZhbHVlX2d1YXJkLnJlYXNvbiIpIHx8ICIiLAogICAgZWNvbm9taWNWYWx1ZUNlbnRzOiBkYi5nZXRLSigidmFsdWVfZ3VhcmQuZWNvbm9taWNfdmFsdWVfY2VudHMiKSB8fCAiIiwKICAgIHVwc3RyZWFtUmVtb3RlSGVhZDogZGIuZ2V0S1YoInVwc3RyZWFtX3NlZW5fcmVtb3RlX2hlYWQiKSB8fCAiIiwKICB9OwoKICB0cnkgewogICAgc25hcHNob3QuYWN0aXZlR29hbHMgPSBkYi5yYXcucHJlcGFyZSgKICAgICAgIlNFTEVDVCBpZCwgc3RhdHVzLCBDT0FMRVNDRShzdHJhdGVneSwgJycpIEFTIHN0cmF0ZWd5ICIgKwogICAgICAiRlJPTSBnb2FscyBXSEVSRSBzdGF0dXMgPSAnYWN0aXZlJyBPUkRFUiBCWSBjcmVhdGVkX2F0IEFTQywgaWQgQVNDIiwKICAgICkuYWxsKCk7CiAgfSBjYXRjaCB7CiAgICBzbmFwc2hvdC5hY3RpdmVHb2FscyA9IFtdOwogIH0KCiAgdHJ5IHsKICAgIHNuYXBzaG90LnRhc2tzID0gZGIucmF3LnByZXBhcmUoCiAgICAgICJTRUxFQ1QgaWQsIGdvYWxfaWQsIHN0YXR1cywgQ09BTEVTQ0UoYXNzaWduZWRfdG8sICcnKSBBUyBhc3NpZ25lZF90bywgIiArCiAgICAgICJyZXRyeV9jb3VudCwgQ09BTEVTQ0Uoc3RhcnRlZF9hdCwgJycpIEFTIHN0YXJ0ZWRfYXQsICIgKwogICAgICAiQ09BTEVTQ0UoY29tcGxldGVkX2F0LCAnJykgQVMgY29tcGxldGVkX2F0LCBDT0FMRVNDRShyZXN1bHQsICcnKSBBUyByZXN1bHQgIiArCiAgICAgICJGUk9NIHRhc2tfZ3JhcGggV0hFUkUgc3RhdHVzIElOICgncGVuZGluZycsICdhc3NpZ25lZCcsICdydW5uaW5nJywgJ2Jsb2NrZWQnLCAnZmFpbGVkJykgIiArCiAgICAgICJPUkRFUiBCWSBnb2FsX2lkIEFTQywgaWQgQVNDIiwKICAgICkuYWxsKCk7CiAgfSBjYXRjaCB7CiAgICBzbmFwc2hvdC50YXNrcyA9IFtdOwogIH0KCiAgcmV0dXJuIGNyZWF0ZUhhc2goInNoYTI1NiIpCiAgICAudXBkYXRlKEpTT04uc3RyaW5naWZ5KHNuYXBzaG90KSkKICAgIC5kaWdlc3QoImhleCIpOwp9CgpmdW5jdGlvbiBsb2coX2NvbmZpZzogQXV0b21hdG9uQ29uZmlnLCBtZXNzYWdlOiBzdHJpbmcpOiB2b2lkIHsKICBsb2dnZXIuaW5mbyhtZXNzYWdlKTsKfQo=");
 
 console.log("[NOVENS CLOUD] Deterministic LLM state gate applied.");
