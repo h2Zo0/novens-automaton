@@ -152,7 +152,7 @@ export async function callAgent402(params: Agent402Params): Promise<Agent402Resu
     );
   }
 
-  const chargedCents = Number(paid.amountCents ?? authorizedCents);
+  const chargedCents = Number((paid as any).amountCents ?? authorizedCents);
   if (chargedCents > 0) {
     const ledger = readLedger();
     ledger.spentCents += chargedCents;
@@ -196,6 +196,6 @@ export async function callAgent402(params: Agent402Params): Promise<Agent402Resu
     totalTokens,
     finishReason: String(choice.finish_reason || "stop"),
     walletCostCents: chargedCents,
-    paymentReceipt: paid.paymentResponse,
+    paymentReceipt: (paid as any).paymentResponse,
   };
 }
