@@ -579,16 +579,34 @@ function buildPlannerUserPrompt(params: {
 }
 
 function parsePlannerResponse(content: string): unknown {
-  if (content.trim().length === 0) {
+  const trimmed = content.trim();
+  if (trimmed.length === 0) {
     throw new Error("Planner returned an empty response");
   }
 
-  try {
-    return JSON.parse(content);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Planner returned invalid JSON: ${message}`);
+  const unfenced = trimmed
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+
+  const candidates = [trimmed, unfenced];
+  const firstBrace = unfenced.indexOf("{");
+  const lastBrace = unfenced.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    candidates.push(unfenced.slice(firstBrace, lastBrace + 1));
   }
+
+  let lastError: unknown;
+  for (const candidate of [...new Set(candidates)]) {
+    try {
+      return JSON.parse(candidate);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  const message = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(`Planner returned invalid JSON: ${message}`);
 }
 
 function validateCustomRole(value: unknown, path: string): CustomRoleDef {
