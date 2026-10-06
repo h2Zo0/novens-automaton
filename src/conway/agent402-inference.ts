@@ -99,14 +99,14 @@ function compactMessagesForAgent402(messages: ChatMessage[]): ChatMessage[] {
       content:
         "NOVENS/Automaton deterministic policies remain authoritative outside this model. " +
         "Reason only about the current task; do not invent completed actions.\n\n" +
-        headTail(combined, 10_000),
+        headTail(combined, 4_800),
     } as ChatMessage);
   }
 
-  for (const m of nonSystems.slice(-6)) {
+  for (const m of nonSystems.slice(-3)) {
     compact.push({
       ...(m as any),
-      content: headTail(textContent((m as any).content), 1_500),
+      content: headTail(textContent((m as any).content), 850),
     } as ChatMessage);
   }
 
