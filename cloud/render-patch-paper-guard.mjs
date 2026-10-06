@@ -459,3 +459,5 @@ await import("./render-patch-runtime-scroll.mjs");
 await import("./render-patch-runtime-intent.mjs");
 
 await import("./render-patch-runnable-value-hold.mjs");
+
+await import("./render-patch-no-openai.mjs");
