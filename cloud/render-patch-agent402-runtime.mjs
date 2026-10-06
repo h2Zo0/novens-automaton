@@ -117,6 +117,9 @@ function write(file, content) { fs.writeFileSync(file, content); }
     "        } else {",
     "          if (duplicateReasoning && reasoningTask?.id) {",
     '            log(config, "[AGENT402 GATE] Recent reasoning already purchased for task " + reasoningTask.id + "; deterministic cooldown.");',
+    "            const cooldownRemainingMs = Math.max(250, reasoningCooldownMs - (Date.now() - previousReasoningAt));",
+    '            db.setKV("sleep_until", new Date(Date.now() + cooldownRemainingMs).toISOString());',
+    '            log(config, "[AGENT402 GATE] Yielding until reasoning cooldown expires in " + cooldownRemainingMs + "ms.");'
     "          }",
     "          if (reasoningTask?.id) {",
     '            db.setKV("reasoning_required.task_id", String(reasoningTask.id));',
@@ -134,7 +137,7 @@ function write(file, content) { fs.writeFileSync(file, content); }
     '              ? "[DETERMINISTIC] Task " + reasoningTask.id + " requires reasoning; no paid inference route enabled."',
     '              : "[DETERMINISTIC] Scheduler/orchestrator tick complete. No LLM inference call made.",',
     "          );",
-    '          db.deleteKV("sleep_until");',
+    "          if (!duplicateReasoning) db.deleteKV(\"sleep_until\");",
     '          db.setAgentState("running");',
     '          onStateChange?.("running");',
     '          log(config, "[NOVENS CONTINUE] No parent reasoning task yet; keep deterministic orchestration runnable.");',
