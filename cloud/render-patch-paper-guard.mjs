@@ -468,6 +468,8 @@ await import("./render-patch-agent402-inference.mjs");
 
 await import("./render-patch-agent402-runtime.mjs");
 
+await import("./render-patch-creator-order.mjs");
+
 
 await import("./render-patch-never-stop.mjs");
 
