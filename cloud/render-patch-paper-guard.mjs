@@ -444,4 +444,6 @@ await import("./render-patch-daytona-focus.mjs");
 
 await import("./render-patch-runtime-fingerprint.mjs");
 
-await import("./render-patch-daytona-batch.mjs");\n\nawait import("./render-patch-deterministic-gate.mjs");
+await import("./render-patch-daytona-batch.mjs");
+
+await import("./render-patch-deterministic-gate.mjs");
