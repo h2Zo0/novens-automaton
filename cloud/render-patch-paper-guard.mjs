@@ -457,3 +457,5 @@ await import("./render-patch-deterministic-complexity.mjs");
 await import("./render-patch-runtime-scroll.mjs");
 
 await import("./render-patch-runtime-intent.mjs");
+
+await import("./render-patch-runnable-value-hold.mjs");
