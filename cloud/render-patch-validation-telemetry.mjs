@@ -24,7 +24,9 @@ replaceOnce(
 
     const validationLine =
       stream === 'system' ||
-      /\\[(?:AGENT402|DAYTONA|DETERMINISTIC|NOVENS KEEPALIVE|NOVENS COOLDOWN|THINK|LOOP END)\\]/.test(line);
+      stream === 'stderr' ||
+      /\\[(?:AGENT402|DAYTONA|DETERMINISTIC|NOVENS KEEPALIVE|NOVENS COOLDOWN|THINK|LOOP END)\\]/.test(line) ||
+      /\\b(?:ERROR|WARN)\\b/.test(line);
 
     if(
       process.env.NOVENS_PAPER_AUTOSTART==='1' ||
