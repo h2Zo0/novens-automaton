@@ -72,6 +72,129 @@ replaceOne(
 );
 
 replaceOne(
+  'src/agent/tools.ts',
+  `import nodePath from "node:path";`,
+  `import nodePath from "node:path";
+import fs from "node:fs";`
+);
+
+replaceOne(
+  'src/agent/tools.ts',
+  `const SANDBOX_HOME = "/root";
+
+/**
+ * Validate that a file path resolves to within the allowed root directory.
+ * Returns the resolved absolute path, or an error string if out of bounds.
+ */
+function confinePathToSandbox(filePath: string): string | { error: string } {
+  // Resolve ~ to SANDBOX_HOME
+  const expanded = filePath.startsWith("~")
+    ? nodePath.join(SANDBOX_HOME, filePath.slice(1))
+    : filePath;
+  // Resolve to absolute (relative paths resolve against SANDBOX_HOME)
+  const resolved = nodePath.resolve(SANDBOX_HOME, expanded);
+  // Ensure the resolved path is within the sandbox home
+  if (resolved !== SANDBOX_HOME && !resolved.startsWith(SANDBOX_HOME + "/")) {
+    return {
+      error: \`Blocked: write_file path "\${filePath}" resolves to "\${resolved}" which is outside the allowed directory (\${SANDBOX_HOME}). Writes are confined to the sandbox home.\`,
+    };
+  }
+  return resolved;
+}`,
+  `const SANDBOX_HOME = "/root";
+
+function effectiveSandboxHome(): string {
+  if (process.env.NOVENS_PAPER_MODE === "1") {
+    const stateDir = process.env.AUTOMATON_STATE_DIR || "/tmp/novens-paper";
+    const workspace = nodePath.join(stateDir, "workspace");
+    fs.mkdirSync(workspace, { recursive: true, mode: 0o700 });
+    return workspace;
+  }
+  return SANDBOX_HOME;
+}
+
+/**
+ * Validate that a file path resolves to within the allowed root directory.
+ * Returns the resolved absolute path, or an error string if out of bounds.
+ */
+function confinePathToSandbox(filePath: string): string | { error: string } {
+  const sandboxHome = effectiveSandboxHome();
+  const expanded = filePath.startsWith("~")
+    ? nodePath.join(sandboxHome, filePath.slice(1))
+    : filePath;
+  const resolved = nodePath.resolve(sandboxHome, expanded);
+  if (resolved !== sandboxHome && !resolved.startsWith(sandboxHome + "/")) {
+    return {
+      error: \`Blocked: path "\${filePath}" resolves outside the allowed paper/sandbox workspace (\${sandboxHome}).\`,
+    };
+  }
+  return resolved;
+}`
+);
+
+replaceOne(
+  'src/agent/tools.ts',
+  `        const command = args.command as string;
+        const forbidden = isForbiddenCommand(command, ctx.identity.sandboxId);
+        if (forbidden) return forbidden;
+
+        const result = await ctx.conway.exec(
+`,
+  `        const command = args.command as string;
+        const forbidden = isForbiddenCommand(command, ctx.identity.sandboxId);
+        if (forbidden) return forbidden;
+
+        if (process.env.NOVENS_PAPER_MODE === "1") {
+          return \`PAPER isolated workspace: \${effectiveSandboxHome()}. Shell execution is intentionally disabled to prevent real external side effects. Use write_file/read_file for paper artifacts. Command was not executed: \${command}\`;
+        }
+
+        const result = await ctx.conway.exec(
+`
+);
+
+replaceOne(
+  'src/agent/tools.ts',
+  `        if (isProtectedFile(confined)) {
+          return "Blocked: Cannot overwrite protected file. This is a hard-coded safety invariant.";
+        }
+        await ctx.conway.writeFile(confined, args.content as string);
+        return \`File written: \${confined}\`;
+`,
+  `        if (isProtectedFile(confined)) {
+          return "Blocked: Cannot overwrite protected file. This is a hard-coded safety invariant.";
+        }
+        if (process.env.NOVENS_PAPER_MODE === "1") {
+          fs.mkdirSync(nodePath.dirname(confined), { recursive: true });
+          fs.writeFileSync(confined, args.content as string, "utf8");
+          return \`PAPER file written locally: \${confined}\`;
+        }
+        await ctx.conway.writeFile(confined, args.content as string);
+        return \`File written: \${confined}\`;
+`
+);
+
+replaceOne(
+  'src/agent/tools.ts',
+  `        try {
+          return await ctx.conway.readFile(filePath);
+        } catch {
+`,
+  `        if (process.env.NOVENS_PAPER_MODE === "1") {
+          const confined = confinePathToSandbox(filePath);
+          if (typeof confined === "object") return confined.error;
+          try {
+            return fs.readFileSync(confined, "utf8");
+          } catch {
+            return \`ERROR: File not found or not readable in PAPER workspace: \${filePath}\`;
+          }
+        }
+        try {
+          return await ctx.conway.readFile(filePath);
+        } catch {
+`
+);
+
+replaceOne(
   'src/heartbeat/tick-context.ts',
   `  // Fetch balances ONCE
   let creditBalance = 0;
@@ -174,7 +297,7 @@ This is a fictive-money evaluation run. Your starting economic capital is €\${
 All wallet funds, profits, losses, owner payouts, child funding and economic outcomes in this run are hypothetical.
 Do not make real purchases, real transfers, real blockchain transactions, real paid deployments, or irreversible external account actions.
 Use the same reasoning, planning, revenue-first discipline, accounting and €150 child-creation rules you would use in production.
-You may create local artifacts and plans inside the isolated paper-test workspace.
+You may create local artifacts and plans inside the isolated paper-test workspace. Use relative paths or ~/ paths with write_file/read_file; do not use /root or paths outside the paper workspace. Shell execution is intentionally unavailable in PAPER mode.
 The purpose of this run is to measure decisions and behavior, not to fabricate profits. Never claim a fictive result is real revenue.
 --- END NOVENS PAPER TEST ---\`,
     );
