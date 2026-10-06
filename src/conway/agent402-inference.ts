@@ -102,10 +102,11 @@ export async function callAgent402(params: Agent402Params): Promise<Agent402Resu
     requestBody.temperature = params.temperature;
   }
 
-  const idempotencyKey = "novens-" + randomUUID();
+  let idempotencyKey = "novens-" + randomUUID();
   let authorizedCents = 0;
 
-  const paid = await x402Fetch(
+  // NOVENS_AGENT402_FAILOVER_V1
+  let paid = await x402Fetch(
     ENDPOINT,
     account,
     "POST",
@@ -137,6 +138,54 @@ export async function callAgent402(params: Agent402Params): Promise<Agent402Resu
       authorizedCents = amountCents;
     },
   );
+
+  if (
+    !paid.success &&
+    Number(paid.status || 0) >= 500 &&
+    !(paid as any).amountCents
+  ) {
+    const fallbackModel =
+      process.env.NOVENS_AGENT402_FALLBACK_MODEL ||
+      "qwen/qwen-2.5-coder-32b-instruct";
+    if (fallbackModel !== model) {
+      console.log(
+        "[AGENT402 FAILOVER] primary=" + model +
+        " status=" + String(paid.status || "unknown") +
+        " fallback=" + fallbackModel,
+      );
+      requestBody.model = fallbackModel;
+      idempotencyKey = "novens-" + randomUUID();
+      authorizedCents = 0;
+      paid = await x402Fetch(
+        ENDPOINT,
+        account,
+        "POST",
+        JSON.stringify(requestBody),
+        {
+          "Idempotency-Key": idempotencyKey,
+          "User-Agent": "NOVENS-Automaton/0.2.1",
+        },
+        maxCallCents,
+        chainType,
+        async (amountCents) => {
+          const ledger = readLedger();
+          if (ledger.spentCents + amountCents > dailyCapCents) {
+            throw new Error(
+              "Agent402 daily cap would be exceeded: " +
+              ledger.spentCents.toFixed(2) + "c + " +
+              amountCents.toFixed(2) + "c > " +
+              dailyCapCents.toFixed(2) + "c",
+            );
+          }
+          console.log(
+            "[AGENT402 PAYMENT] quote=" + amountCents.toFixed(4) +
+            "c signer=NOVENS wallet fallback=" + fallbackModel,
+          );
+          authorizedCents = amountCents;
+        },
+      );
+    }
+  }
 
   if (!paid.success) {
     throw new Error(
