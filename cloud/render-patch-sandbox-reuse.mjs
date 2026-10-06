@@ -13,7 +13,7 @@ if(!src.includes("NOVENS_SANDBOX_REUSE_V1")){
  const repl=[
  "      execute: async (args, ctx) => {",
  "        // NOVENS_SANDBOX_REUSE_V1",
- "        const existing = await ctx.conway.listSandboxes();\n        const sandboxItems = Array.isArray(existing) ? existing : existing.sandboxes;",
+ "        const existing = await ctx.conway.listSandboxes();\n        const sandboxItems = existing;",
  '        const reusable = sandboxItems.find((s) => s.status === "running") ?? sandboxItems[0];',
  '        if (reusable) return "Sandbox reused: " + reusable.id + " [" + reusable.status + "]";',
  "        try {",
@@ -23,7 +23,7 @@ if(!src.includes("NOVENS_SANDBOX_REUSE_V1")){
  "          const message = error instanceof Error ? error.message : String(error);",
  "          const lower = message.toLowerCase();",
  '          if (lower.includes("disk limit") || lower.includes("maximum allowed") || lower.includes("quota")) {',
- "            const again = await ctx.conway.listSandboxes();\n            const againItems = Array.isArray(again) ? again : again.sandboxes;",
+ "            const again = await ctx.conway.listSandboxes();\n            const againItems = again;",
  '            const fallback = againItems.find((s) => s.status === "running") ?? againItems[0];',
  '            if (fallback) return "Sandbox reused after quota check: " + fallback.id + " [" + fallback.status + "]";',
  '            return "SANDBOX_CAPACITY_EXHAUSTED: no reusable sandbox visible; do not retry until capacity changes.";',
