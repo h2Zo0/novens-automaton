@@ -124,7 +124,7 @@ console.log("[NOVENS CLOUD] x402 v2 Agent402 payment compatibility applied.");
     '        : network === "eip155:84532"',
     '          ? (process.env.BASE_SEPOLIA_RPC_URL || undefined)',
     '          : undefined;'
-  ].join("\\n");
+  ].join("\n");
   if (!src.includes(to)) {
     if (!src.includes(from)) throw new Error("Base RPC selection target missing");
     src = src.replace(from, to);
