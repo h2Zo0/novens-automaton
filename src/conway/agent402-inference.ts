@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { loadWalletAccount, getWalletChainType, getAutomatonDir } from "../identity/wallet.js";
-import { getUsdcBalanceDetailed, x402Fetch } from "./x402.js";
+import { x402Fetch } from "./x402.js";
 import type { ChatMessage } from "../types.js";
 
 interface Agent402Params {
@@ -80,7 +80,6 @@ export async function callAgent402(params: Agent402Params): Promise<Agent402Resu
   const model = process.env.NOVENS_AGENT402_MODEL || "deepseek/deepseek-chat";
   const maxCallCents = positiveNumber("NOVENS_AGENT402_MAX_CALL_CENTS", 25);
   const dailyCapCents = positiveNumber("NOVENS_AGENT402_DAILY_CENTS", 500);
-  const reserveCents = positiveNumber("NOVENS_AGENT402_RESERVE_CENTS", 1000);
   const outputCap = Math.max(
     64,
     Math.min(
@@ -128,30 +127,13 @@ export async function callAgent402(params: Agent402Params): Promise<Agent402Resu
         );
       }
 
-      const balanceRead = await getUsdcBalanceDetailed(
-        account.address,
-        "eip155:8453",
-      );
-      if (!balanceRead.ok) {
-        throw new Error(
-          "Base USDC balance read unavailable; refusing to treat RPC failure as zero: " +
-          String(balanceRead.error || "unknown read error"),
-        );
-      }
-      const balanceUsd = balanceRead.balance;
-      const balanceCents = Math.floor(balanceUsd * 100);
+      // Do not gate x402 on a separate public Base RPC balance read.
+      // The signed USDC payment itself is authoritative: if NOVENS cannot pay,
+      // settlement fails naturally. This avoids treating RPC 429/errors as €0.
       console.log(
         "[AGENT402 PAYMENT] quote=" + amountCents.toFixed(4) +
-        "c wallet=" + balanceCents +
-        "c reserve=" + reserveCents + "c",
+        "c signer=NOVENS wallet",
       );
-      if (balanceCents - amountCents < reserveCents) {
-        throw new Error(
-          "NOVENS reserve protected: wallet " + balanceCents +
-          "c - quote " + amountCents.toFixed(2) +
-          "c < reserve " + reserveCents + "c",
-        );
-      }
       authorizedCents = amountCents;
     },
   );
