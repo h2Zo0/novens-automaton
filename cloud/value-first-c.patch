@@ -1,0 +1,99 @@
+diff --git a/src/agent/tools.ts b/src/agent/tools.ts
+index bf38ed9..fce556f 100644
+--- a/src/agent/tools.ts
++++ b/src/agent/tools.ts
+@@ -463,6 +463,18 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
+           return `Invalid tier. Valid amounts (USD): ${TOPUP_TIERS.join(", ")}`;
+         }
+ 
++        const selfFundingMode = process.env.NOVENS_SELF_FUNDING === "1";
++        if (selfFundingMode && amountUsd !== 5) {
++          return "Autonomous inference self-funding is limited to the minimum $5 tier.";
++        }
++
++        const { canSelfFundInference } = await import("../economy/inference-self-fund.js");
++        const economyAgentId = ctx.db.getIdentity("automatonId") || ctx.identity.address;
++        const funding = canSelfFundInference(ctx.db, economyAgentId, amountUsd * 100);
++        if (!funding.allowed) {
++          return `Inference topup blocked: ${funding.reason}`;
++        }
++
+         // Check USDC balance first (EVM-only path after Solana guard above)
+         const { getUsdcBalance } = await import("../conway/x402.js");
+         const usdcBalance = await getUsdcBalance(ctx.identity.address, "eip155:8453");
+@@ -477,7 +489,14 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
+           undefined,
+           (amountCents) => {
+             if (!ctx.spendTracker?.reserveSpend) throw new Error("Durable spend authorization unavailable");
+-            ctx.spendTracker.reserveSpend({ toolName: "topup_credits", amountCents, category: "x402" }, ctx.config.treasuryPolicy ?? DEFAULT_TREASURY_POLICY);
++            const configured = ctx.config.treasuryPolicy ?? DEFAULT_TREASURY_POLICY;
++            const topupPolicy = selfFundingMode
++              ? { ...configured, maxX402PaymentCents: Math.max(configured.maxX402PaymentCents, 500) }
++              : configured;
++            ctx.spendTracker.reserveSpend(
++              { toolName: "topup_credits", amountCents, category: "x402" },
++              topupPolicy,
++            );
+           },
+         );
+ 
+diff --git a/src/index.ts b/src/index.ts
+index c97e8ba..76285a7 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -27,6 +27,7 @@ import { runAgentLoop } from "./agent/loop.js";
+ import { ModelRegistry } from "./inference/registry.js";
+ import { loadSkills } from "./skills/loader.js";
+ import { initStateRepo } from "./git/state-versioning.js";
++import { checkUpstream } from "./self-mod/upstream.js";
+ import { createSocialClient } from "./social/client.js";
+ import { PolicyEngine } from "./agent/policy-engine.js";
+ import { SpendTracker } from "./agent/spend-tracker.js";
+@@ -618,6 +619,47 @@ async function run(): Promise<void> {
+ 
+   while (true) {
+     try {
++      const valueHoldUntilRaw = db.getKV("value_guard.hold_until");
++      if (valueHoldUntilRaw) {
++        const holdUntilMs = Date.parse(valueHoldUntilRaw);
++        const baselineEconomic = BigInt(db.getKV("value_guard.economic_value_cents") || "0");
++        const economyAgentId = db.getIdentity("automatonId") || identity.address;
++        const currentEconomic = db.getEconomyState(economyAgentId)?.economicValueCents ?? 0n;
++
++        let meaningfulWake = currentEconomic > baselineEconomic;
++        if (!meaningfulWake && Number.isFinite(holdUntilMs) && holdUntilMs > Date.now()) {
++          try {
++            const upstream = checkUpstream();
++            meaningfulWake = upstream.behind > 0;
++            if (meaningfulWake) {
++              logger.info(
++                `[VALUE HOLD] Git changed: ${upstream.behind} commit(s) available. Resuming productive inference.`,
++              );
++              insertWakeEvent(db.raw, "heartbeat", "git mission/code changed while in value hold");
++            }
++          } catch (error) {
++            logger.warn(
++              `[VALUE HOLD] Git poll failed without waking inference: ${
++                error instanceof Error ? error.message : String(error)
++              }`,
++            );
++          }
++        }
++
++        if (!meaningfulWake && Number.isFinite(holdUntilMs) && holdUntilMs > Date.now()) {
++          const remaining = holdUntilMs - Date.now();
++          logger.info(
++            `[VALUE HOLD] Inference paused. Deterministic Git/economic checks only; next check in ${Math.ceil(Math.min(remaining, 60_000) / 1000)}s.`,
++          );
++          await sleep(Math.max(1_000, Math.min(remaining, 60_000)));
++          continue;
++        }
++
++        db.deleteKV("value_guard.hold_until");
++        db.deleteKV("value_guard.reason");
++        db.deleteKV("value_guard.economic_value_cents");
++      }
++
+       // Reload skills (may have changed since last loop)
+       try {
+         skills = loadSkills(skillsDir, db);
