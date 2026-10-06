@@ -19,6 +19,12 @@ tar() {
   if [ -f cloud/hybrid-conway.patch.b64 ]; then
     base64 -d cloud/hybrid-conway.patch.b64 | git apply --whitespace=nowarn - || return $?
   fi
+  if [ -f cloud/daytona-deps.part00 ]; then
+    cat cloud/daytona-deps.part* | tr -d '\n\r ' | base64 -d | git apply --whitespace=nowarn - || return $?
+  fi
+  if [ -f cloud/daytona-code.part00 ]; then
+    cat cloud/daytona-code.part* | tr -d '\n\r ' | base64 -d | git apply --whitespace=nowarn - || return $?
+  fi
   [ -f cloud/render-patch-auth.mjs ] && node cloud/render-patch-auth.mjs || return $?
   [ -f cloud/render-patch-portfolio.mjs ] && node cloud/render-patch-portfolio.mjs || return $?
   [ -f cloud/render-patch-git-mirror.mjs ] && node cloud/render-patch-git-mirror.mjs || return $?
