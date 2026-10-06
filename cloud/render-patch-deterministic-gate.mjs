@@ -153,6 +153,24 @@ insertBeforeOnce(
 ): string {
   const holdUntil = db.getKV("value_guard.hold_until") || "";
   const holdUntilMs = holdUntil ? Date.parse(holdUntil) : Number.NaN;
+  const valueHoldActive =
+    Number.isFinite(holdUntilMs) && Date.now() < holdUntilMs;
+
+  // Preserve autonomy for a parent-owned task. If a turn made no concrete
+  // progress, throttle identical reasoning rather than suppressing it forever:
+  // a new runtime process may retry immediately and a still-stuck task gets
+  // one deterministic retry opportunity every five minutes.
+  let activeParentWork = false;
+  try {
+    activeParentWork = Boolean(
+      db.raw.prepare(
+        "SELECT 1 FROM task_graph " +
+        "WHERE assigned_to = ? AND status IN ('assigned', 'running') LIMIT 1",
+      ).get(identityAddress),
+    );
+  } catch {
+    activeParentWork = false;
+  }
 
   const snapshot: Record<string, unknown> = {
     renderCommit: process.env.RENDER_GIT_COMMIT || "",
@@ -163,6 +181,13 @@ insertBeforeOnce(
     creditsCents: financial.creditsCents,
     usdcCents: Math.round(financial.usdcBalance * 100),
     progressSeq: db.getKV("llm_gate.progress_seq") || "0",
+    activeParentWork,
+    activeWorkRuntimePid:
+      activeParentWork && !valueHoldActive ? process.pid : 0,
+    activeWorkRetryBucket:
+      activeParentWork && !valueHoldActive
+        ? Math.floor(Date.now() / 300_000)
+        : 0,
     valueHoldUntil: holdUntil,
     valueHoldExpired:
       Number.isFinite(holdUntilMs) && Date.now() >= holdUntilMs,
