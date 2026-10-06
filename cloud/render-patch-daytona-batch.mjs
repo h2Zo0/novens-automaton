@@ -55,7 +55,7 @@ console.log("[NOVENS CLOUD] Daytona workspace navigation guidance applied.");
           return \`Sandbox created: \${info.id} (\${info.vcpu} vCPU, \${info.memoryMb}MB RAM)\`;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          if (/(?:disk limit|maximum allowed|quota)/i.test(message)) {
+          if (message.toLowerCase().includes("disk limit") || message.toLowerCase().includes("maximum allowed") || message.toLowerCase().includes("quota")) {
             const retryExisting = await ctx.conway.listSandboxes();
             const fallback = retryExisting.find((s) => s.status === "running") ?? retryExisting[0];
             if (fallback) return \`Sandbox reused after quota check: \${fallback.id} [\${fallback.status}]\`;
