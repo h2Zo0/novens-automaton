@@ -1,0 +1,216 @@
+diff --git a/src/agent/value-system-prompt.ts b/src/agent/value-system-prompt.ts
+new file mode 100644
+index 0000000..10dea21
+--- /dev/null
++++ b/src/agent/value-system-prompt.ts
+@@ -0,0 +1,48 @@
++import type {
++  AutomatonConfig,
++  AutomatonIdentity,
++  FinancialState,
++  AgentState,
++} from "../types.js";
++
++export function buildValueFirstSystemPrompt(params: {
++  identity: AutomatonIdentity;
++  config: AutomatonConfig;
++  financial: FinancialState;
++  state: AgentState;
++  gitMission: string;
++}): string {
++  const { identity, config, financial, state, gitMission } = params;
++  return `You are ${config.name}, an autonomous economic agent.
++
++SOURCE OF TRUTH
++The NOVENS mission loaded from the persistent cloud Git repository is authoritative for business behavior. Follow it before creating goals or spending inference.
++
++<git_mission>
++${gitMission}
++</git_mission>
++
++CURRENT STATE
++- agent: ${identity.address}
++- runtime state: ${state}
++- inference model: ${config.inferenceModel}
++- compute credits: ${financial.creditsCents} cents
++- wallet USDC view: ${financial.usdcBalance}
++- owner: ${config.ownerAddress || config.creatorAddress}
++
++NON-NEGOTIABLE ECONOMIC RULES
++1. Verified external net value and owner payout are the objective. Activity, plans, files, turns and bot count are not value by themselves.
++2. Never repeat status checks, plans, README/WORKLOG rewrites, or blocked actions just to stay busy.
++3. Use the fewest inference calls necessary. Prefer deterministic tools and existing information over another reasoning turn.
++4. A new child is optional and may exist only if the hard economic gate permits it. The parent needs at least EUR 150, prior child-creation obligations must be settled, EUR 50 is owed to the owner, EUR 50 funds the child, and at least EUR 50 remains with the parent.
++5. Existing children, failures, debts and history may not be erased to reset limits.
++6. Do not claim fictive/paper value as real revenue.
++7. If a task is blocked, either take a materially different action that advances revenue or stop consuming inference and wait for a meaningful Git/economic/external event.
++8. Compute and inference are operating expenses. Preserve the parent's protected reserve and all amounts already owed before discretionary spending.
++9. When a wallet-payable inference provider is configured and free spendable funds exist, buy only the smallest credit tier needed. Never spend protected reserve or owed funds on inference.
++10. If no wallet-payable provider is available, do not pretend the agent is self-funded; obey the inference budget and enter value-hold rather than burning externally billed API credits.
++
++EXECUTION DISCIPLINE
++Take one concrete next action. A turn must either increase verified economic value, complete a real task, create one new necessary artifact, remove a real blocker, or perform a legitimate external revenue action. Otherwise do not loop.
++`;
++}
+diff --git a/src/economy/inference-self-fund.ts b/src/economy/inference-self-fund.ts
+new file mode 100644
+index 0000000..a9b4a51
+--- /dev/null
++++ b/src/economy/inference-self-fund.ts
+@@ -0,0 +1,53 @@
++import type { AutomatonDatabase } from "../types.js";
++import { ECONOMY } from "./types.js";
++import { getCreationDebtSummary } from "./obligations.js";
++
++export interface InferenceFundingCapacity {
++  economicValueCents: number;
++  protectedReserveCents: number;
++  creationDebtCents: number;
++  freeSpendableCents: number;
++}
++
++export function getInferenceFundingCapacity(
++  db: AutomatonDatabase,
++  agentId: string,
++): InferenceFundingCapacity {
++  const state = db.getEconomyState(agentId);
++  const debt = getCreationDebtSummary(db, agentId);
++  const economicValueCents = Number(state?.economicValueCents ?? 0n);
++  const protectedReserveCents = Number(ECONOMY.STARTING_CAPITAL_CENTS);
++  const creationDebtCents = debt.totalCents;
++  const freeSpendableCents = Math.max(
++    0,
++    economicValueCents - protectedReserveCents - creationDebtCents,
++  );
++
++  return {
++    economicValueCents,
++    protectedReserveCents,
++    creationDebtCents,
++    freeSpendableCents,
++  };
++}
++
++export function canSelfFundInference(
++  db: AutomatonDatabase,
++  agentId: string,
++  requestedCents: number,
++): { allowed: boolean; reason: string; capacity: InferenceFundingCapacity } {
++  const capacity = getInferenceFundingCapacity(db, agentId);
++  if (!Number.isSafeInteger(requestedCents) || requestedCents <= 0) {
++    return { allowed: false, reason: "invalid inference funding amount", capacity };
++  }
++  if (capacity.freeSpendableCents < requestedCents) {
++    return {
++      allowed: false,
++      reason:
++        `free spendable capital ${capacity.freeSpendableCents}c is below requested ${requestedCents}c ` +
++        `after protected reserve ${capacity.protectedReserveCents}c and creation debt ${capacity.creationDebtCents}c`,
++      capacity,
++    };
++  }
++  return { allowed: true, reason: "ok", capacity };
++}
+diff --git a/src/economy/value-guard.ts b/src/economy/value-guard.ts
+new file mode 100644
+index 0000000..1bcfef1
+--- /dev/null
++++ b/src/economy/value-guard.ts
+@@ -0,0 +1,97 @@
++import type { AgentTurn } from "../types.js";
++
++const HARD_VALUE_TOOLS = new Set([
++  "complete_goal",
++  "x402_fetch",
++  "register_domain",
++  "expose_port",
++  "create_sandbox",
++  "git_commit",
++  "git_push",
++  "send_message",
++  "register_erc8004",
++  "fund_child",
++  "transfer_credits",
++]);
++
++const LOW_VALUE_TOOLS = new Set([
++  "get_plan",
++  "orchestrator_status",
++  "list_goals",
++  "check_credits",
++  "check_usdc_balance",
++  "check_inference_spending",
++  "review_upstream_changes",
++  "sleep",
++]);
++
++function cleanResult(turnResult: string | undefined): string {
++  return String(turnResult || "").toLowerCase();
++}
++
++export function turnCreatedValue(
++  turn: AgentTurn,
++  seenArtifacts: Set<string>,
++  economicValueBeforeCents?: bigint,
++  economicValueAfterCents?: bigint,
++): { createdValue: boolean; reason: string } {
++  if (
++    typeof economicValueBeforeCents === "bigint" &&
++    typeof economicValueAfterCents === "bigint" &&
++    economicValueAfterCents > economicValueBeforeCents
++  ) {
++    return { createdValue: true, reason: "economic_value_increased" };
++  }
++
++  for (const tc of turn.toolCalls) {
++    if (tc.error) continue;
++
++    if (HARD_VALUE_TOOLS.has(tc.name)) {
++      return { createdValue: true, reason: `tool:${tc.name}` };
++    }
++
++    if (tc.name === "write_file" || tc.name === "edit_own_file") {
++      const artifactPath = String(
++        (tc.arguments as Record<string, unknown>)?.path ??
++        (tc.arguments as Record<string, unknown>)?.file_path ??
++        "",
++      ).trim();
++      const lowerPath = artifactPath.toLowerCase();
++      const lowValueDocument =
++        /(^|\/)(readme|worklog|todo|plan|idea|proposal|notes?|status|soul)([._/-]|$)/i.test(lowerPath) ||
++        lowerPath.endsWith(".md") ||
++        lowerPath.endsWith(".txt");
++      if (artifactPath && !lowValueDocument && !seenArtifacts.has(artifactPath)) {
++        seenArtifacts.add(artifactPath);
++        return { createdValue: true, reason: `new_product_artifact:${artifactPath}` };
++      }
++      continue;
++    }
++
++    if (tc.name === "exec") {
++      const result = cleanResult(tc.result);
++      const command = String((tc.arguments as Record<string, unknown>)?.command || "").trim();
++      const blocked = /disabled|blocked|not allowed|intentionally disabled|error:/.test(result);
++      const readOnly = /^(ls|pwd|cat|head|tail|grep|find|git status|git log)(\s|$)/i.test(command);
++      if (!blocked && command && !readOnly) {
++        return { createdValue: true, reason: "productive_exec" };
++      }
++      continue;
++    }
++
++    if (!LOW_VALUE_TOOLS.has(tc.name)) {
++      const result = cleanResult(tc.result);
++      if (result && !/blocked|error|failed|not found/.test(result)) {
++        return { createdValue: true, reason: `successful_tool:${tc.name}` };
++      }
++    }
++  }
++
++  return { createdValue: false, reason: "no_verified_progress" };
++}
++
++export function nextValueHoldMs(previousHoldCount: number): number {
++  const base = 5 * 60_000;
++  const exponent = Math.min(Math.max(previousHoldCount, 0), 4);
++  return Math.min(base * 2 ** exponent, 60 * 60_000);
++}
