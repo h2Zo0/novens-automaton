@@ -433,3 +433,5 @@ replaceOne(
 );
 
 console.log('[NOVENS CLOUD] Isolated paper-test patch applied.');
+
+await import("./render-patch-runtime-value.mjs");
