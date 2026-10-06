@@ -461,3 +461,9 @@ await import("./render-patch-runtime-intent.mjs");
 await import("./render-patch-runnable-value-hold.mjs");
 
 await import("./render-patch-no-openai.mjs");
+
+await import("./render-patch-agent402-x402.mjs");
+
+await import("./render-patch-agent402-inference.mjs");
+
+await import("./render-patch-agent402-runtime.mjs");
