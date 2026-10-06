@@ -55,34 +55,59 @@ replaceOnce(
   "NOVENS_DISABLE_OPENAI",
 );
 
-// 2) The legacy direct client must also ignore any persisted OpenAI key.
+// 2) The legacy direct client must also ignore OpenAI even if a key is
+// still present in the persisted config.
 replaceOnce(
-  "src/index.ts",
-  `  const directOpenAIKey = process.env.OPENAI_API_KEY || config.openaiApiKey;`,
-  `  const directOpenAIKey =
-    process.env.NOVENS_DISABLE_OPENAI === "1"
-      ? undefined
-      : (process.env.OPENAI_API_KEY || config.openaiApiKey);`,
-  "process.env.NOVENS_DISABLE_OPENAI === \"1\"",
-);
-
-// 3) Deterministic-only mode is allowed to boot without an inference provider.
-replaceOnce(
-  "src/index.ts",
-  `  const standaloneMode = !apiKey;`,
-  `  const standaloneMode = !apiKey;
-  const deterministicOnly = process.env.NOVENS_DETERMINISTIC_ONLY === "1";`,
-  "const deterministicOnly = process.env.NOVENS_DETERMINISTIC_ONLY",
+  "src/conway/inference.ts",
+  `  const { apiUrl, apiKey, openaiApiKey, anthropicApiKey, ollamaBaseUrl, getModelProvider } = options;`,
+  `  const { apiUrl, apiKey, openaiApiKey, anthropicApiKey, ollamaBaseUrl, getModelProvider } = options;
+  const effectiveOpenAiApiKey =
+    process.env.NOVENS_DISABLE_OPENAI === "1" ? undefined : openaiApiKey;`,
+  "const effectiveOpenAiApiKey =",
 );
 
 {
+  const file = "src/conway/inference.ts";
+  let src = fs.readFileSync(file, "utf8");
+  if (!src.includes("openaiApiKey: effectiveOpenAiApiKey")) {
+    src = src.replace(
+      "      openaiApiKey,\\n      anthropicApiKey,",
+      "      openaiApiKey: effectiveOpenAiApiKey,\\n      anthropicApiKey,",
+    );
+  }
+  if (!src.includes('backend === "openai" ? (effectiveOpenAiApiKey as string)')) {
+    src = src.replace(
+      'backend === "openai" ? (openaiApiKey as string) :',
+      'backend === "openai" ? (effectiveOpenAiApiKey as string) :',
+    );
+  }
+  fs.writeFileSync(file, src);
+}
+
+// 3) Deterministic-only mode is allowed to boot without an inference provider.
+{
   const file = "src/index.ts";
   let src = fs.readFileSync(file, "utf8");
-  if (!src.includes("!directProviderReady && !deterministicOnly")) {
-    src = src.replace(
-      "if (standaloneMode && !directProviderReady) {",
-      "if (standaloneMode && !directProviderReady && !deterministicOnly) {",
-    );
+  if (!src.includes("NOVENS_DETERMINISTIC_ONLY !== \"1\"")) {
+    const from = "if (standaloneMode && !directProviderReady) {";
+    if (src.includes(from)) {
+      src = src.replace(
+        from,
+        'if (standaloneMode && !directProviderReady && process.env.NOVENS_DETERMINISTIC_ONLY !== "1") {',
+      );
+    } else {
+      // Older cloud source uses the pre-model-aware provider check.
+      const legacy =
+        "if (standaloneMode && !directOpenAIKey && !directAnthropicKey && !configuredOllamaBaseUrl) {";
+      if (src.includes(legacy)) {
+        src = src.replace(
+          legacy,
+          'if (standaloneMode && !directOpenAIKey && !directAnthropicKey && !configuredOllamaBaseUrl && process.env.NOVENS_DETERMINISTIC_ONLY !== "1") {',
+        );
+      } else {
+        throw new Error("NOVENS deterministic-only preflight target not found in src/index.ts");
+      }
+    }
     fs.writeFileSync(file, src);
   }
 }
