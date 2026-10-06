@@ -467,3 +467,5 @@ await import("./render-patch-agent402-x402.mjs");
 await import("./render-patch-agent402-inference.mjs");
 
 await import("./render-patch-agent402-runtime.mjs");
+
+await import("./render-patch-never-stop.mjs");
