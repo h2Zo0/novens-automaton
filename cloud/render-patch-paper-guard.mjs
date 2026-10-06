@@ -451,3 +451,5 @@ await import("./render-patch-deterministic-gate.mjs");
 await import("./render-patch-heartbeat-noexec.mjs");
 
 await import("./render-patch-compact-tool-schemas.mjs");
+
+await import("./render-patch-deterministic-complexity.mjs");
