@@ -134,6 +134,11 @@ export async function callAgent402(params: Agent402Params): Promise<Agent402Resu
         "evm",
       );
       const balanceCents = Math.floor(balanceUsd * 100);
+      console.log(
+        "[AGENT402 PAYMENT] quote=" + amountCents.toFixed(4) +
+        "c wallet=" + balanceCents +
+        "c reserve=" + reserveCents + "c",
+      );
       if (balanceCents - amountCents < reserveCents) {
         throw new Error(
           "NOVENS reserve protected: wallet " + balanceCents +
@@ -184,6 +189,13 @@ export async function callAgent402(params: Agent402Params): Promise<Agent402Resu
   const completionTokens = Number(data?.usage?.completion_tokens || 0);
   const totalTokens = Number(
     data?.usage?.total_tokens || promptTokens + completionTokens,
+  );
+
+  console.log(
+    "[AGENT402 RESULT] model=" + String(data?.model || model) +
+    " paid=" + chargedCents.toFixed(4) + "c" +
+    " tokens=" + totalTokens +
+    " receipt=" + ((paid as any).paymentResponse ? "yes" : "no"),
   );
 
   return {
