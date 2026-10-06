@@ -8,7 +8,7 @@ tar() {
     base64 -d cloud/local-sync.patch.b64 | git apply --whitespace=nowarn - || return $?
   fi
   [ -f cloud/render-patch-auth.mjs ] && node cloud/render-patch-auth.mjs || return $?
-  [ -f cloud/render-patch-portfolio.mjs ] && node cloud/render-patch-portfolio.mjs || return $?
+  [ -f cloud/render-patch-portfolio.mjs ] && node cloud/render-patch-portfolio.mjs || return $?\n  [ -f cloud/render-patch-git-mirror.mjs ] && node cloud/render-patch-git-mirror.mjs || return $?
   [ -f cloud/render-patch-paper-guard.mjs ] && node cloud/render-patch-paper-guard.mjs || return $?
   return 0
 }
