@@ -29,7 +29,6 @@ tar() {
   [ -f cloud/render-patch-portfolio.mjs ] && node cloud/render-patch-portfolio.mjs || return $?
   [ -f cloud/render-patch-git-mirror.mjs ] && node cloud/render-patch-git-mirror.mjs || return $?
   [ -f cloud/render-patch-paper-guard.mjs ] && node cloud/render-patch-paper-guard.mjs || return $?
-  [ -f cloud/render-patch-runtime-value.mjs ] && node cloud/render-patch-runtime-value.mjs || return $?
   return 0
 }
 corepack() {
