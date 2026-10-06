@@ -23,3 +23,51 @@ replaceGuidance(
   "Run a shell command inside Daytona's isolated workspace (not Render). Do not use ~/.automaton or /root; use pwd and relative project paths. Conway/Render host-management CLIs are unavailable here: never invoke conway-cli, conway, or equivalent aliases. Exit 127 means the capability is unavailable and must not be retried under another spelling. A PROTECTED_FILE result is also definitive: do not retry that path, do not try nested aliases of the same protected filename, and do not spend another reasoning turn merely to bypass the guard. Use unprotected project files or an executable command that works within the existing sandbox. Returns stdout, stderr and exit code."
 );
 console.log("[NOVENS CLOUD] Daytona workspace navigation guidance applied.");
+
+
+// NOVENS_SANDBOX_REUSE_V1
+{
+  const file = "src/agent/tools.ts";
+  let src = fs.readFileSync(file, "utf8");
+  const before = `      execute: async (args, ctx) => {
+        const info = await ctx.conway.createSandbox({
+          name: args.name as string,
+          vcpu: args.vcpu as number,
+          memoryMb: args.memory_mb as number,
+          diskGb: args.disk_gb as number,
+        });
+        return \`Sandbox created: \${info.id} (\${info.vcpu} vCPU, \${info.memoryMb}MB RAM)\`;
+      },`;
+  const after = `      execute: async (args, ctx) => {
+        const requestedName = String(args.name || "").trim();
+        const existing = await ctx.conway.listSandboxes();
+        const reusable = existing.find((s) => s.status === "running") ?? existing[0];
+        if (reusable) {
+          return \`Sandbox reused: \${reusable.id} [\${reusable.status}] (existing capacity; no new disk allocated)\`;
+        }
+        try {
+          const info = await ctx.conway.createSandbox({
+            name: requestedName,
+            vcpu: args.vcpu as number,
+            memoryMb: args.memory_mb as number,
+            diskGb: args.disk_gb as number,
+          });
+          return \`Sandbox created: \${info.id} (\${info.vcpu} vCPU, \${info.memoryMb}MB RAM)\`;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (/disk limit|maximum allowed|quota/i.test(message)) {
+            const retryExisting = await ctx.conway.listSandboxes();
+            const fallback = retryExisting.find((s) => s.status === "running") ?? retryExisting[0];
+            if (fallback) return \`Sandbox reused after quota check: \${fallback.id} [\${fallback.status}]\`;
+            return "SANDBOX_CAPACITY_EXHAUSTED: no reusable sandbox is visible. Do not retry create_sandbox until capacity changes.";
+          }
+          throw error;
+        }
+      },`;
+  if (!src.includes(after)) {
+    if (!src.includes(before)) throw new Error("Sandbox reuse patch target missing");
+    src = src.replace(before, after);
+    fs.writeFileSync(file, src);
+  }
+}
+console.log("[NOVENS CLOUD] Existing sandbox reuse enabled before new allocation.");
