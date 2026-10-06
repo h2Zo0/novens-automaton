@@ -443,3 +443,5 @@ await import("./render-patch-daytona-standard.mjs");
 await import("./render-patch-daytona-focus.mjs");
 
 await import("./render-patch-runtime-fingerprint.mjs");
+
+await import("./render-patch-daytona-batch.mjs");
