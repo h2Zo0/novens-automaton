@@ -25,7 +25,10 @@ replaceOnce(
     const validationLine =
       stream === 'system' ||
       stream === 'stderr' ||
-      /\\[(?:AGENT402(?: [A-Z]+)?|DAYTONA(?: [A-Z]+)?|DETERMINISTIC|NOVENS KEEPALIVE|NOVENS COOLDOWN|THINK|LOOP END)\\]/.test(line) ||
+      /\\[AGENT402(?:\\]| )/.test(line) ||
+      /\\[DAYTONA(?:\\]| )/.test(line) ||
+      /\\[TOOL(?: RESULT)?\\]/.test(line) ||
+      /\\[(?:DETERMINISTIC|NOVENS KEEPALIVE|NOVENS COOLDOWN|THINK|LOOP END)\\]/.test(line) ||
       /\\b(?:ERROR|WARN)\\b/.test(line);
 
     if(
