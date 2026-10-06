@@ -3,20 +3,18 @@ import fs from "node:fs";
 const file = "src/agent/loop.ts";
 let src = fs.readFileSync(file, "utf8");
 
-if (!src.includes("NOVENS_CREATOR_ORDER_V1")) {
+if (!src.includes("NOVENS_CREATOR_ORDER_V2")) {
   const anchor = "  // Initialize inference router (Phase 2.3)";
   const at = src.indexOf(anchor);
   if (at < 0) throw new Error("Creator order insertion point not found");
 
   const block = `
-  // NOVENS_CREATOR_ORDER_V1
-  // Accept a creator order as a one-shot orchestrator goal. The order is
-  // consumed only after it has actually been created, so a restart cannot lose it.
+  // NOVENS_CREATOR_ORDER_V2
+  // Keep the creator order productive while START is active. Create exactly one\n  // goal only when no active goal exists; never multiply goals just to stay busy.
   {
     const creatorOrder = String(process.env.NOVENS_CREATOR_ORDER || "").trim();
     if (creatorOrder) {
-      const previousOrder = db.getKV("novens.creator_order.last") || "";
-      if (previousOrder !== creatorOrder) {
+      {
         let activeGoalCount = 0;
         try {
           const row = db.raw
@@ -42,7 +40,7 @@ if (!src.includes("NOVENS_CREATOR_ORDER_V1")) {
             creatorOrder.slice(0, 6000),
             strategy.slice(0, 2500),
           );
-          db.setKV("novens.creator_order.last", creatorOrder);
+          db.setKV("novens.creator_order.last", creatorOrder);\n          db.setKV("novens.creator_order.active_goal_id", String(goal.id));
           log(
             config,
             "[CREATOR ORDER] Accepted goal " + goal.id + ": " + goal.title,
@@ -50,7 +48,7 @@ if (!src.includes("NOVENS_CREATOR_ORDER_V1")) {
         } else {
           log(
             config,
-            "[CREATOR ORDER] Waiting for current active goal to finish before accepting new order.",
+            "[CREATOR ORDER] Active goal already exists; no duplicate goal created.",
           );
         }
       }
