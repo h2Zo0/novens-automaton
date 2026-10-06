@@ -63,4 +63,35 @@ if (!src.includes("NOVENS_CREATOR_ORDER_V1")) {
   fs.writeFileSync(file, src);
 }
 
+
+{
+  const plannerFile = "src/orchestration/planner.ts";
+  let planner = fs.readFileSync(plannerFile, "utf8");
+  if (!planner.includes("NOVENS_PLANNER_JSON_COMPAT_V1")) {
+    const needle = "function parsePlannerResponse(content: string): unknown {";
+    const at = planner.indexOf(needle);
+    const end = planner.indexOf("\nfunction validateCustomRole", at);
+    if (at < 0 || end < 0) throw new Error("Planner parser target missing");
+    const block = [
+      "function parsePlannerResponse(content: string): unknown {",
+      "  // NOVENS_PLANNER_JSON_COMPAT_V1",
+      "  const trimmed = content.trim();",
+      "  if (!trimmed) throw new Error(\"Planner returned an empty response\");",
+      "  const candidates = [trimmed];",
+      "  const first = trimmed.indexOf(\"{\");",
+      "  const last = trimmed.lastIndexOf(\"}\");",
+      "  if (first >= 0 && last > first) candidates.push(trimmed.slice(first, last + 1));",
+      "  let failure = \"unknown parse error\";",
+      "  for (const candidate of candidates) {",
+      "    try { return JSON.parse(candidate); } catch (error) { failure = error instanceof Error ? error.message : String(error); }",
+      "  }",
+      "  throw new Error(\"Planner returned invalid JSON: \" + failure);",
+      "}",
+      ""
+    ].join("\\n");
+    planner = planner.slice(0, at) + block + planner.slice(end);
+    fs.writeFileSync(plannerFile, planner);
+  }
+}
+
 console.log("[NOVENS CLOUD] One-shot creator order bridge applied.");
