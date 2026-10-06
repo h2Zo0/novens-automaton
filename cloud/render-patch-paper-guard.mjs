@@ -439,3 +439,5 @@ await import("./render-patch-runtime-value.mjs");
 await import("./render-patch-balance-timeout.mjs");
 
 await import("./render-patch-daytona-standard.mjs");
+
+await import("./render-patch-daytona-focus.mjs");
