@@ -72,6 +72,66 @@ replaceOne(
 );
 
 replaceOne(
+  'src/heartbeat/tick-context.ts',
+  `  // Fetch balances ONCE
+  let creditBalance = 0;
+  try {
+    creditBalance = await conway.getCreditsBalance();
+  } catch (err: any) {
+    logger.error("Failed to fetch credit balance", err instanceof Error ? err : undefined);
+  }
+
+  let usdcBalance = 0;
+  if (walletAddress) {
+    try {
+      const network = chainType === "solana" ? "solana:mainnet" : "eip155:8453";
+      usdcBalance = await getUsdcBalance(walletAddress, network, chainType as any);
+    } catch (err: any) {
+      logger.error("Failed to fetch USDC balance", err instanceof Error ? err : undefined);
+    }
+  }
+`,
+  `  // Fetch balances ONCE. PAPER mode is fully synthetic and never queries
+  // Conway or a blockchain balance endpoint.
+  const paperMode = process.env.NOVENS_PAPER_MODE === "1";
+  const requestedPaperCents = Number(process.env.NOVENS_PAPER_INITIAL_CENTS || "2500");
+  const paperCents = Number.isSafeInteger(requestedPaperCents) && requestedPaperCents >= 0 ? requestedPaperCents : 2500;
+
+  let creditBalance = paperMode ? paperCents : 0;
+  if (!paperMode) {
+    try {
+      creditBalance = await conway.getCreditsBalance();
+    } catch (err: any) {
+      logger.error("Failed to fetch credit balance", err instanceof Error ? err : undefined);
+    }
+  }
+
+  let usdcBalance = paperMode ? paperCents / 100 : 0;
+  if (!paperMode && walletAddress) {
+    try {
+      const network = chainType === "solana" ? "solana:mainnet" : "eip155:8453";
+      usdcBalance = await getUsdcBalance(walletAddress, network, chainType as any);
+    } catch (err: any) {
+      logger.error("Failed to fetch USDC balance", err instanceof Error ? err : undefined);
+    }
+  }
+`
+);
+
+replaceOne(
+  'src/agent/tools.ts',
+  `      execute: async (_args, ctx) => {
+        const { getUsdcBalance } = await import("../conway/x402.js");`,
+  `      execute: async (_args, ctx) => {
+        if (process.env.NOVENS_PAPER_MODE === "1") {
+          const requested = Number(process.env.NOVENS_PAPER_INITIAL_CENTS || "2500");
+          const cents = Number.isSafeInteger(requested) && requested >= 0 ? requested : 2500;
+          return \`PAPER fictive balance: €\${(cents / 100).toFixed(2)} available. No blockchain balance was queried.\`;
+        }
+        const { getUsdcBalance } = await import("../conway/x402.js");`
+);
+
+replaceOne(
   'src/agent/loop.ts',
   `async function getFinancialState(
   conway: ConwayClient,
