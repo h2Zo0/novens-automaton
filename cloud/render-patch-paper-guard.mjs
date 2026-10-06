@@ -452,4 +452,6 @@ await import("./render-patch-heartbeat-noexec.mjs");
 
 await import("./render-patch-compact-tool-schemas.mjs");
 
-await import("./render-patch-deterministic-complexity.mjs");\n\nawait import("./render-patch-runtime-scroll.mjs");\n
+await import("./render-patch-deterministic-complexity.mjs");
+
+await import("./render-patch-runtime-scroll.mjs");
