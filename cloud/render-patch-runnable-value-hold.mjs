@@ -9,15 +9,15 @@ function replaceOnce(file, from, to, marker = to) {
   fs.writeFileSync(file, src.replace(from, to));
 }
 
-// 1) A persisted VALUE HOLD must immediately yield if productive parent work
-// still exists. This also releases stale holds left by previous deployments.
+// 1) Release a persisted long VALUE HOLD before entering its existing block
+// whenever parent-owned productive work is still runnable.
 replaceOnce(
   "src/index.ts",
   `      const valueHoldUntilRaw = db.getKV("value_guard.hold_until");
       if (valueHoldUntilRaw) {
-        const holdUntilMs = Date.parse(valueHoldUntilRaw);
 `,
-  `      const valueHoldUntilRaw = db.getKV("value_guard.hold_until");
+  `      let valueHoldUntilRaw = db.getKV("value_guard.hold_until");
+
       if (valueHoldUntilRaw) {
         let runnableProductiveWork = false;
         try {
@@ -49,36 +49,20 @@ replaceOnce(
           db.deleteKV("value_guard.hold_until");
           db.deleteKV("value_guard.reason");
           db.deleteKV("value_guard.economic_value_cents");
+          valueHoldUntilRaw = null;
           logger.info(
             "[VALUE CONTINUE] Runnable parent work exists; stale VALUE HOLD released.",
           );
-        } else {
-          const holdUntilMs = Date.parse(valueHoldUntilRaw);
+        }
+      }
+
+      if (valueHoldUntilRaw) {
 `,
   "[VALUE CONTINUE] Runnable parent work exists; stale VALUE HOLD released.",
 );
 
-replaceOnce(
-  "src/index.ts",
-  `        db.deleteKV("value_guard.hold_until");
-        db.deleteKV("value_guard.reason");
-        db.deleteKV("value_guard.economic_value_cents");
-      }
-
-      // Reload skills`,
-  `          db.deleteKV("value_guard.hold_until");
-          db.deleteKV("value_guard.reason");
-          db.deleteKV("value_guard.economic_value_cents");
-        }
-      }
-
-      // Reload skills`,
-  "// Reload skills",
-);
-
-// 2) When the no-value budget is reached but runnable work remains, do not
-// enter the long economic HOLD. Cool down for 60s, keep the task intact, and
-// retry. This limits token burn while preserving autonomous progress.
+// 2) Reaching the no-value budget must not create a long HOLD while a parent
+// task can still advance. Use a one-minute zero-token cooldown instead.
 replaceOnce(
   "src/agent/loop.ts",
   `          if (noValueTurns >= maxNoValueTurns || tokensSinceValue >= maxTokensWithoutValue) {
@@ -139,7 +123,7 @@ replaceOnce(
               onStateChange?.("sleeping");
               log(
                 config,
-                \`[VALUE CONTINUE] Runnable work remains. No long HOLD; 60s zero-token cooldown before the next reasoning opportunity.\`,
+                "[VALUE CONTINUE] Runnable work remains. No long HOLD; 60s zero-token cooldown before next reasoning.",
               );
               running = false;
               break;
@@ -168,8 +152,9 @@ replaceOnce(
   "[VALUE CONTINUE] Runnable work remains.",
 );
 
-// 3) The deterministic inference gate already throttles active parent work.
-// Align its retry bucket with the 60s productive cooldown rather than 5min.
+// 3) Active parent work gets one fresh reasoning opportunity per minute if
+// nothing else changes. Real tool progress still invalidates the fingerprint
+// immediately, so execution can continue without waiting.
 replaceOnce(
   "src/agent/loop.ts",
   `    activeWorkRetryBucket:
