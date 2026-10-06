@@ -1,0 +1,204 @@
+diff --git a/src/agent/tools.ts b/src/agent/tools.ts
+index 362dc4d..8c874b5 100644
+--- a/src/agent/tools.ts
++++ b/src/agent/tools.ts
+@@ -572,7 +572,7 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
+           memoryMb: args.memory_mb as number,
+           diskGb: args.disk_gb as number,
+         });
+-        return `Sandbox created: ${info.id} (${info.vcpu} vCPU, ${info.memoryMb}MB RAM)`;
++        return `Sandbox ${info.reused ? "reused" : "created"}: ${info.id} (${info.vcpu} vCPU, ${info.memoryMb}MB RAM)`;
+       },
+     },
+     {
+diff --git a/src/compute/daytona-client.ts b/src/compute/daytona-client.ts
+index 590c6e6..344d954 100644
+--- a/src/compute/daytona-client.ts
++++ b/src/compute/daytona-client.ts
+@@ -29,6 +29,28 @@ function sandboxInfo(s: any): SandboxInfo {
+   };
+ }
+ 
++/**
++ * Automaton exposes a legacy /root virtual workspace. Convert it into the
++ * Daytona sandbox's actual work directory without allowing path traversal.
++ */
++export function daytonaWorkspacePath(filePath: string, workDir: string): string {
++  const root = path.posix.normalize(workDir);
++  if (!root.startsWith("/") || root === "/") throw new Error("Invalid Daytona work directory");
++  const input = String(filePath || "").trim();
++  if (!input || input.includes("\\") || input.includes("\0")) {
++    throw new Error("Invalid sandbox file path");
++  }
++  const relative = input.startsWith("/root/") ? input.slice(6) :
++    input === "/root" ? "." : input.startsWith("~/") ? input.slice(2) :
++    input === "~" ? "." : input;
++  if (path.posix.isAbsolute(relative)) throw new Error("File outside sandbox workspace");
++  const resolved = path.posix.resolve(root, relative);
++  if (resolved !== root && !resolved.startsWith(root + "/")) {
++    throw new Error("File outside sandbox workspace");
++  }
++  return resolved;
++}
++
+ export function createDaytonaComputeClient(
+   base: ConwayClient,
+   targetSandboxId = "",
+@@ -51,17 +73,29 @@ export function createDaytonaComputeClient(
+   };
+ 
+   const createSandbox = async (options: CreateSandboxOptions): Promise<SandboxInfo> => {
++    const name = String(options.name || "").trim();
++    if (!name) throw new Error("Sandbox name required");
++    let legacyRoot = false;
++    for await (const existing of daytona.list({ labels: { novens: "true" } })) {
++      if (existing.name !== name && existing.name !== name + "-managed") continue;
++      if (existing.user === "root") {
++        legacyRoot = true;
++        continue;
++      }
++      await ensureStarted(existing.id);
++      return { ...sandboxInfo(existing), reused: true };
++    }
+     const sandbox = await daytona.create({
+-      name: options.name,
+-      user: "root",
++      name: legacyRoot ? name + "-managed" : name,
+       language: "typescript",
+       labels: {
+         novens: "true",
+-        role: options.name?.startsWith("automaton-child-") ? "child" : "workspace",
++        role: name.startsWith("automaton-child-") ? "child" : "workspace",
+       },
+       autoStopInterval: 60,
+       autoDeleteInterval: -1,
+     }, { timeout: 120 });
++    if (sandbox.user === "root") throw new Error("Daytona created unusable root sandbox");
+     return sandboxInfo(sandbox);
+   };
+ 
+@@ -71,6 +105,10 @@ export function createDaytonaComputeClient(
+       const existing = JSON.parse(fs.readFileSync(file, "utf8"));
+       const id = String(existing?.id || "").trim();
+       if (id) {
++        const existingSandbox = await daytona.get(id);
++        if (existingSandbox.user === "root") {
++          throw new Error("Legacy root workspace must be replaced");
++        }
+         await ensureStarted(id);
+         return id;
+       }
+@@ -78,14 +116,26 @@ export function createDaytonaComputeClient(
+       // Create a fresh persistent parent workspace below.
+     }
+ 
+-    const sandbox = await daytona.create({
+-      name: "novens-parent-workspace",
+-      user: "root",
+-      language: "typescript",
+-      labels: { novens: "true", role: "parent-workspace" },
+-      autoStopInterval: 60,
+-      autoDeleteInterval: -1,
+-    }, { timeout: 120 });
++    let sandbox;
++    try {
++      const previous = await daytona.get("novens-parent-workspace-managed");
++      if (previous.user === "root" || previous.labels?.novens !== "true") {
++        throw new Error("Unusable parent sandbox");
++      }
++      sandbox = previous;
++      await ensureStarted(sandbox.id);
++    } catch {
++      sandbox = await daytona.create({
++        name: "novens-parent-workspace-managed",
++        language: "typescript",
++        labels: { novens: "true", role: "parent-workspace" },
++        autoStopInterval: 60,
++        autoDeleteInterval: -1,
++      }, { timeout: 120 });
++    }
++    if (sandbox.user === "root") {
++      throw new Error("Daytona created another unusable root workspace");
++    }
+ 
+     fs.mkdirSync(path.dirname(file), { recursive: true });
+     fs.writeFileSync(
+@@ -104,7 +154,7 @@ export function createDaytonaComputeClient(
+     const sandbox = await ensureStarted(id);
+     const result = await sandbox.process.executeCommand(
+       command,
+-      "/root",
++      undefined,
+       undefined,
+       timeoutSeconds(timeout),
+     );
+@@ -118,13 +168,20 @@ export function createDaytonaComputeClient(
+   const writeFile = async (remotePath: string, content: string): Promise<void> => {
+     const id = await currentSandboxId();
+     const sandbox = await ensureStarted(id);
+-    await sandbox.fs.uploadFile(Buffer.from(content, "utf8"), remotePath);
++    const workspace = await sandbox.getWorkDir();
++    if (!workspace) throw new Error("Daytona work directory unavailable");
++    await sandbox.fs.uploadFile(
++      Buffer.from(content, "utf8"),
++      daytonaWorkspacePath(remotePath, workspace),
++    );
+   };
+ 
+   const readFile = async (remotePath: string): Promise<string> => {
+     const id = await currentSandboxId();
+     const sandbox = await ensureStarted(id);
+-    const data = await sandbox.fs.downloadFile(remotePath);
++    const workspace = await sandbox.getWorkDir();
++    if (!workspace) throw new Error("Daytona work directory unavailable");
++    const data = await sandbox.fs.downloadFile(daytonaWorkspacePath(remotePath, workspace));
+     return data.toString("utf8");
+   };
+ 
+diff --git a/src/economy/value-guard.ts b/src/economy/value-guard.ts
+index 1bcfef1..9ec5478 100644
+--- a/src/economy/value-guard.ts
++++ b/src/economy/value-guard.ts
+@@ -45,8 +45,15 @@ export function turnCreatedValue(
+ 
+   for (const tc of turn.toolCalls) {
+     if (tc.error) continue;
++    const result = cleanResult(tc.result);
++    const failed =
++      /(?:permission denied|blocked|\berror\b|\bfailed\b|unavailable|not allowed|not found|no such file)/.test(result) ||
++      (tc.name === "exec" && !/exit_code:\s*0(?:\s|$)/.test(result));
++    if (failed) continue;
+ 
+     if (HARD_VALUE_TOOLS.has(tc.name)) {
++      // Reusing a sandbox is not a new artifact, even though it may be useful.
++      if (tc.name === "create_sandbox" && !/sandbox created:/.test(result)) continue;
+       return { createdValue: true, reason: `tool:${tc.name}` };
+     }
+ 
+diff --git a/src/orchestration/orchestrator.ts b/src/orchestration/orchestrator.ts
+index c879411..0014b2c 100644
+--- a/src/orchestration/orchestrator.ts
++++ b/src/orchestration/orchestrator.ts
+@@ -555,6 +555,9 @@ export class Orchestrator {
+       const assignedTasks = getTasksByGoal(this.params.db, goal.id)
+         .filter((t) => t.status === "assigned" && t.assignedTo);
+       for (const task of assignedTasks) {
++        // The parent is not a child worker; never mark its self-assigned tasks
++        // dead just because it is absent from the child process registry.
++        if (task.assignedTo === this.params.identity.address) continue;
+         const alive = this.params.isWorkerAlive(task.assignedTo!);
+         if (!alive) {
+           logger.warn("Recovering stale task from dead worker", {
+diff --git a/src/types.ts b/src/types.ts
+index 5a5f427..f871ff7 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -442,6 +442,8 @@ export interface SandboxInfo {
+   memoryMb: number;
+   diskGb: number;
+   terminalUrl?: string;
++  /** True when an existing sandbox was reused rather than provisioned. */
++  reused?: boolean;
+   createdAt: string;
+ }
+ 
