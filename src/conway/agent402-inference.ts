@@ -66,6 +66,76 @@ function writeLedger(value: DailyLedger): void {
   );
 }
 
+
+/* NOVENS_AGENT402_CONTEXT_COMPACTION_V1
+ * The LLM is a consultant, not the state store. Keep deterministic state in
+ * Automaton and send only enough context for the current semantic decision.
+ */
+function textContent(value: unknown): string {
+  if (typeof value === "string") return value;
+  try { return JSON.stringify(value); } catch { return String(value ?? ""); }
+}
+
+function headTail(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  const head = Math.floor(maxChars * 0.62);
+  const tail = maxChars - head;
+  return value.slice(0, head) +
+    "\n\n[... older/nonessential context omitted by NOVENS ...]\n\n" +
+    value.slice(-tail);
+}
+
+function compactMessagesForAgent402(messages: ChatMessage[]): ChatMessage[] {
+  const systems = messages.filter((m: any) => m?.role === "system");
+  const nonSystems = messages.filter((m: any) => m?.role !== "system");
+
+  const compact: ChatMessage[] = [];
+  if (systems.length > 0) {
+    const combined = systems
+      .map((m: any) => textContent(m.content))
+      .join("\n\n");
+    compact.push({
+      role: "system",
+      content:
+        "NOVENS/Automaton deterministic policies remain authoritative outside this model. " +
+        "Reason only about the current task; do not invent completed actions.\n\n" +
+        headTail(combined, 10_000),
+    } as ChatMessage);
+  }
+
+  for (const m of nonSystems.slice(-6)) {
+    compact.push({
+      ...(m as any),
+      content: headTail(textContent((m as any).content), 1_500),
+    } as ChatMessage);
+  }
+
+  return compact;
+}
+
+function compactToolsForAgent402(tools: unknown[] | undefined): unknown[] | undefined {
+  if (!tools?.length) return undefined;
+
+  // Preserve execution-capable tools first; inspection/planning tools are
+  // useful only when room remains. Do not alter the tool's JSON contract.
+  const preferred = new Set([
+    "exec", "write_file", "read_file", "create_sandbox",
+    "x402_fetch", "web_search", "fetch_url",
+    "complete_task", "update_task", "create_goal",
+  ]);
+
+  const nameOf = (tool: any): string =>
+    String(tool?.function?.name || tool?.name || "");
+
+  const ordered = [
+    ...tools.filter((t: any) => preferred.has(nameOf(t))),
+    ...tools.filter((t: any) => !preferred.has(nameOf(t))),
+  ];
+
+  // 16 tools is enough for one semantic decision and keeps schemas bounded.
+  return ordered.slice(0, 16);
+}
+
 export async function callAgent402(params: Agent402Params): Promise<Agent402Result> {
   if (process.env.NOVENS_AGENT402_ENABLED !== "1") {
     throw new Error("Agent402 inference is disabled");
@@ -89,13 +159,16 @@ export async function callAgent402(params: Agent402Params): Promise<Agent402Resu
     ),
   );
 
+  const compactMessages = compactMessagesForAgent402(params.messages);
+  const compactTools = compactToolsForAgent402(params.tools);
+
   const requestBody: Record<string, unknown> = {
     model,
-    messages: params.messages,
+    messages: compactMessages,
     max_tokens: outputCap,
   };
-  if (params.tools && params.tools.length > 0) {
-    requestBody.tools = params.tools;
+  if (compactTools && compactTools.length > 0) {
+    requestBody.tools = compactTools;
     requestBody.tool_choice = params.toolChoice || "auto";
   }
   if (typeof params.temperature === "number") {
@@ -110,8 +183,8 @@ export async function callAgent402(params: Agent402Params): Promise<Agent402Resu
     "[AGENT402 REQUEST] endpoint=" + ENDPOINT +
     " model=" + model +
     " chars=" + requestChars +
-    " messages=" + params.messages.length +
-    " tools=" + (params.tools?.length || 0),
+    " messages=" + compactMessages.length +
+    " tools=" + (compactTools?.length || 0),
   );
 
   let idempotencyKey = "novens-" + randomUUID();
