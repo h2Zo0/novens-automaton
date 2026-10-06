@@ -32,7 +32,7 @@ interface DailyLedger {
   calls: number;
 }
 
-const ENDPOINT = process.env.NOVENS_AGENT402_ENDPOINT || "https://agent402.tools/v1/auto/chat/completions";
+const ENDPOINT = process.env.NOVENS_AGENT402_ENDPOINT || "https://agent402.tools/v1/chat/completions";
 
 function positiveNumber(name: string, fallback: number): number {
   const value = Number(process.env[name] || fallback);
@@ -77,7 +77,7 @@ export async function callAgent402(params: Agent402Params): Promise<Agent402Resu
     throw new Error("Agent402 self-funded inference currently requires NOVENS' EVM wallet");
   }
 
-  const model = process.env.NOVENS_AGENT402_MODEL || "auto";
+  const model = process.env.NOVENS_AGENT402_MODEL || "google/gemini-3.1-flash-lite";
   const maxCallCents = positiveNumber("NOVENS_AGENT402_MAX_CALL_CENTS", 25);
   const dailyCapCents = positiveNumber("NOVENS_AGENT402_DAILY_CENTS", 500);
   const outputCap = Math.max(
@@ -104,6 +104,15 @@ export async function callAgent402(params: Agent402Params): Promise<Agent402Resu
   if (ENDPOINT.includes("/v1/auto/")) {
     requestBody.quality = process.env.NOVENS_AGENT402_QUALITY || "best";
   }
+
+  const requestChars = JSON.stringify(requestBody).length;
+  console.log(
+    "[AGENT402 REQUEST] endpoint=" + ENDPOINT +
+    " model=" + model +
+    " chars=" + requestChars +
+    " messages=" + params.messages.length +
+    " tools=" + (params.tools?.length || 0),
+  );
 
   let idempotencyKey = "novens-" + randomUUID();
   let authorizedCents = 0;
