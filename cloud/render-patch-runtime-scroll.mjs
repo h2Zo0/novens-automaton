@@ -2,64 +2,38 @@ import fs from "node:fs";
 import path from "node:path";
 
 const MARKER = "NOVENS_SCROLL_PRESERVER";
+const SKIP_DIRS = new Set([
+  ".git",
+  "node_modules",
+  "dist",
+  "cloud",
+  ".pnpm-store",
+]);
 
 function walk(dir) {
   if (!fs.existsSync(dir)) return [];
   const out = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory() && SKIP_DIRS.has(entry.name)) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) out.push(...walk(full));
-    else if (/\.(?:ts|tsx|js|jsx|html)$/i.test(entry.name)) out.push(full);
+    else out.push(full);
   }
   return out;
-}
-
-const candidates = [
-  "src/dashboard/server.ts",
-  ...walk("src/dashboard"),
-  ...walk("ui"),
-  ...walk("public"),
-];
-
-let target = null;
-let source = "";
-
-for (const file of [...new Set(candidates)]) {
-  if (!fs.existsSync(file)) continue;
-  const text = fs.readFileSync(file, "utf8");
-  if (text.includes(MARKER)) {
-    console.log("[NOVENS CLOUD] Runtime log scroll preservation already applied.");
-    process.exit(0);
-  }
-  if (
-    text.includes("</body>") &&
-    (
-      text.includes("Suivi Automaton en direct") ||
-      text.includes("runtime") ||
-      file === "src/dashboard/server.ts"
-    )
-  ) {
-    target = file;
-    source = text;
-    if (text.includes("Suivi Automaton en direct")) break;
-  }
-}
-
-if (!target) {
-  throw new Error("NOVENS scroll-preserver target not found");
 }
 
 const script = String.raw`
 <script>
 /* NOVENS_SCROLL_PRESERVER */
 (function () {
-  var STORAGE_KEY = "novens.runtimeLogScroll.v1";
+  var STORAGE_KEY = "novens.runtimeLogScroll.v2";
   var desiredTop = null;
   var followBottom = true;
   var userActiveUntil = 0;
+  var cachedLog = null;
 
   function isScrollable(el) {
-    if (!el || !el.style) return false;
+    if (!el || !el.isConnected) return false;
     var style = window.getComputedStyle(el);
     var overflowY = style.overflowY;
     return (overflowY === "auto" || overflowY === "scroll") &&
@@ -69,19 +43,22 @@ const script = String.raw`
 
   function score(el) {
     var text = String(el.textContent || "");
-    if (text.length > 16000) text = text.slice(-16000);
+    if (text.length > 18000) text = text.slice(-18000);
     var value = 0;
-    if (text.indexOf("[THINK]") >= 0) value += 8;
-    if (text.indexOf("[TOOL]") >= 0) value += 6;
-    if (text.indexOf("[TOOL RESULT]") >= 0) value += 6;
-    if (text.indexOf("[VALUE]") >= 0) value += 5;
-    if (text.indexOf("INFO  loop") >= 0 || text.indexOf("INFO loop") >= 0) value += 4;
+    if (text.indexOf("[THINK]") >= 0) value += 9;
+    if (text.indexOf("[TOOL]") >= 0) value += 7;
+    if (text.indexOf("[TOOL RESULT]") >= 0) value += 7;
+    if (text.indexOf("[VALUE]") >= 0) value += 6;
+    if (text.indexOf("INFO  loop") >= 0 || text.indexOf("INFO loop") >= 0) value += 5;
     if (text.indexOf("tokens") >= 0) value += 2;
     return value;
   }
 
   function findRuntimeLog() {
-    var nodes = document.querySelectorAll("div,pre,section,article");
+    if (cachedLog && isScrollable(cachedLog) && score(cachedLog) > 0) {
+      return cachedLog;
+    }
+    var nodes = document.querySelectorAll("pre,div,section,article");
     var best = null;
     var bestScore = 0;
     for (var i = 0; i < nodes.length; i++) {
@@ -93,6 +70,7 @@ const script = String.raw`
         bestScore = s;
       }
     }
+    cachedLog = best;
     return best;
   }
 
@@ -108,7 +86,7 @@ const script = String.raw`
     } catch (_) {}
   }
 
-  function saveState(el) {
+  function saveState() {
     try {
       sessionStorage.setItem(
         STORAGE_KEY,
@@ -127,14 +105,14 @@ const script = String.raw`
     desiredTop = el.scrollTop;
     followBottom =
       el.scrollHeight - el.clientHeight - el.scrollTop <= 36;
-    saveState(el);
+    saveState();
   }
 
   function markUserInteraction() {
-    userActiveUntil = Date.now() + 1800;
+    userActiveUntil = Date.now() + 2200;
     window.requestAnimationFrame(captureUserPosition);
     window.setTimeout(captureUserPosition, 80);
-    window.setTimeout(captureUserPosition, 220);
+    window.setTimeout(captureUserPosition, 240);
   }
 
   function restorePosition() {
@@ -151,7 +129,6 @@ const script = String.raw`
     if (desiredTop == null) return;
     var maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
     var target = Math.min(desiredTop, maxTop);
-
     if (Math.abs(el.scrollTop - target) > 2) {
       el.scrollTop = target;
     }
@@ -159,26 +136,13 @@ const script = String.raw`
 
   loadState();
 
-  document.addEventListener("touchstart", markUserInteraction, {
-    passive: true,
-    capture: true
+  ["touchstart","touchmove","touchend","wheel","pointerdown"].forEach(function (type) {
+    document.addEventListener(type, markUserInteraction, {
+      passive: true,
+      capture: true
+    });
   });
-  document.addEventListener("touchmove", markUserInteraction, {
-    passive: true,
-    capture: true
-  });
-  document.addEventListener("touchend", markUserInteraction, {
-    passive: true,
-    capture: true
-  });
-  document.addEventListener("wheel", markUserInteraction, {
-    passive: true,
-    capture: true
-  });
-  document.addEventListener("pointerdown", markUserInteraction, {
-    passive: true,
-    capture: true
-  });
+
   document.addEventListener(
     "scroll",
     function () {
@@ -187,12 +151,11 @@ const script = String.raw`
     true
   );
 
-  var observer = new MutationObserver(function () {
+  new MutationObserver(function () {
+    if (cachedLog && !cachedLog.isConnected) cachedLog = null;
     window.requestAnimationFrame(restorePosition);
-    window.setTimeout(restorePosition, 60);
-  });
-
-  observer.observe(document.documentElement, {
+    window.setTimeout(restorePosition, 80);
+  }).observe(document.documentElement, {
     childList: true,
     subtree: true,
     characterData: true
@@ -203,19 +166,65 @@ const script = String.raw`
     window.setTimeout(restorePosition, 250);
   });
 
-  // Guards against polling code that explicitly resets scrollTop without
-  // replacing DOM nodes. It never moves the view while the user is touching it.
+  // Also catches polling code that changes scrollTop without replacing nodes.
   window.setInterval(restorePosition, 700);
 })();
 </script>
 `;
 
-const index = source.lastIndexOf("</body>");
-if (index < 0) {
-  throw new Error("NOVENS scroll-preserver closing body not found in " + target);
+const files = walk(".");
+const htmlFiles = files.filter((file) => /\.html?$/i.test(file));
+let patched = 0;
+
+for (const file of htmlFiles) {
+  let source;
+  try {
+    source = fs.readFileSync(file, "utf8");
+  } catch {
+    continue;
+  }
+  if (!source.includes("</body>") || source.includes(MARKER)) continue;
+  const at = source.lastIndexOf("</body>");
+  source = source.slice(0, at) + script + source.slice(at);
+  fs.writeFileSync(file, source);
+  patched++;
 }
 
-source = source.slice(0, index) + script + source.slice(index);
-fs.writeFileSync(target, source);
+if (patched === 0) {
+  // Some builds embed the whole HTML page in a TS/JS template.
+  const embedded = files.filter((file) => /\.(?:ts|tsx|js|jsx|mjs)$/i.test(file));
+  for (const file of embedded) {
+    let source;
+    try {
+      const stat = fs.statSync(file);
+      if (stat.size > 2_000_000) continue;
+      source = fs.readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    if (
+      !source.includes("</body>") ||
+      source.includes(MARKER) ||
+      !(
+        source.includes("runtime-control") ||
+        source.includes("Automaton") ||
+        source.includes("runtimeLines")
+      )
+    ) continue;
 
-console.log("[NOVENS CLOUD] Runtime log scroll preservation applied to " + target);
+    const at = source.lastIndexOf("</body>");
+    source = source.slice(0, at) + script + source.slice(at);
+    fs.writeFileSync(file, source);
+    patched++;
+  }
+}
+
+if (patched === 0) {
+  throw new Error("NOVENS scroll-preserver could not find any served HTML entry point");
+}
+
+console.log(
+  "[NOVENS CLOUD] Runtime log scroll preservation applied to " +
+  patched +
+  " HTML entry point(s)."
+);
