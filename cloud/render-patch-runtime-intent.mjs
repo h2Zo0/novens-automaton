@@ -119,6 +119,7 @@ if (!src.includes(marker)) {
           headers: {
             "content-type": "application/json",
             authorization: "Basic " + basic,
+            "x-novens-token": token,
           },
           body: JSON.stringify({ action: "start" }),
         },
