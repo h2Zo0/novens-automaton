@@ -1,0 +1,279 @@
+diff --git a/src/agent/loop.ts b/src/agent/loop.ts
+index 85b3370..b00a012 100644
+--- a/src/agent/loop.ts
++++ b/src/agent/loop.ts
+@@ -1,4 +1,5 @@
+ import os from "node:os";
++import fs from "node:fs";
+ /**
+  * The Agent Loop
+  *
+@@ -25,9 +26,10 @@ import type {
+   InputSource,
+   ModelStrategyConfig,
+ } from "../types.js";
+-import { DEFAULT_MODEL_STRATEGY_CONFIG } from "../types.js";
++import { DEFAULT_MODEL_STRATEGY_CONFIG, DEFAULT_TREASURY_POLICY } from "../types.js";
+ import type { PolicyEngine } from "./policy-engine.js";
+ import { buildSystemPrompt, buildWakeupPrompt } from "./system-prompt.js";
++import { buildValueFirstSystemPrompt } from "./value-system-prompt.js";
+ import { buildContextMessages, trimContext } from "./context.js";
+ import {
+   createBuiltinTools,
+@@ -67,12 +69,38 @@ import { ProviderRegistry } from "../inference/provider-registry.js";
+ import { UnifiedInferenceClient } from "../inference/inference-client.js";
+ import { isIdleOnlyTool } from "./idle-only-tools.js";
+ import { canCreateChildEconomically } from "../economy/obligations.js";
++import { canSelfFundInference } from "../economy/inference-self-fund.js";
++import { nextValueHoldMs, turnCreatedValue } from "../economy/value-guard.js";
+ 
+ const logger = createLogger("loop");
+ const MAX_TOOL_CALLS_PER_TURN = 10;
+ const MAX_CONSECUTIVE_ERRORS = 5;
+ const MAX_REPETITIVE_TURNS = 3;
+ 
++function readGitMission(): string {
++  const repoDir = process.env.NOVENS_GIT_REPO_DIR;
++  if (!repoDir) return "Create verified external value, preserve capital, and pay the owner.";
++  const candidates = [
++    path.join(repoDir, "cloud", "NOVENS_MISSION.md"),
++    path.join(repoDir, "NOVENS_MISSION.md"),
++  ];
++  for (const candidate of candidates) {
++    try {
++      const content = fs.readFileSync(candidate, "utf8").trim();
++      if (content) return content.slice(0, 12_000);
++    } catch {
++      // Try the next mission location.
++    }
++  }
++  return "Create verified external value, preserve capital, and pay the owner.";
++}
++
++function positiveIntEnv(name: string, fallback: number, max: number): number {
++  const raw = Number(process.env[name] || fallback);
++  if (!Number.isSafeInteger(raw) || raw <= 0) return fallback;
++  return Math.min(raw, max);
++}
++
+ export interface AgentLoopOptions {
+   identity: AutomatonIdentity;
+   config: AutomatonConfig;
+@@ -503,7 +531,30 @@ export async function runAgentLoop(
+   const MAX_TEXT_ONLY_TURNS = 3;
+   let textOnlyTurnCount = 0;
+ 
+-  const maxCycleTurns = config.maxTurnsPerCycle ?? 25;
++  const valueMode = process.env.NOVENS_VALUE_MODE !== "0" && process.env.NOVENS_CLOUD_MODE === "1";
++  const maxNoValueTurns = positiveIntEnv("NOVENS_MAX_NO_VALUE_TURNS", 3, 10);
++  const maxContextTurns = positiveIntEnv("NOVENS_CONTEXT_TURNS", 3, 8);
++  const maxOutputTokens = positiveIntEnv("NOVENS_MAX_OUTPUT_TOKENS", 1200, 4096);
++  const maxTokensWithoutValue = positiveIntEnv("NOVENS_MAX_TOKENS_WITHOUT_VALUE", 12_000, 100_000);
++  let noValueTurns = Math.max(0, Number(db.getKV("value_guard.no_progress_turns") || "0") || 0);
++  let tokensSinceValue = Math.max(0, Number(db.getKV("value_guard.tokens_since_value") || "0") || 0);
++  let valueHoldCount = Math.max(0, Number(db.getKV("value_guard.hold_count") || "0") || 0);
++  const seenArtifacts = new Set<string>();
++  for (const prior of db.getRecentTurns(20)) {
++    for (const tc of prior.toolCalls) {
++      if (tc.name !== "write_file" && tc.name !== "edit_own_file") continue;
++      const artifactPath = String(
++        (tc.arguments as Record<string, unknown>)?.path ??
++        (tc.arguments as Record<string, unknown>)?.file_path ??
++        "",
++      ).trim();
++      if (artifactPath) seenArtifacts.add(artifactPath);
++    }
++  }
++
++  const maxCycleTurns = valueMode
++    ? Math.min(config.maxTurnsPerCycle ?? 25, 8)
++    : (config.maxTurnsPerCycle ?? 25);
+   let cycleTurnCount = 0;
+ 
+   // Real queued work takes priority over the generic wake-up synopsis.
+@@ -580,25 +631,41 @@ export async function runAgentLoop(
+         // This prevents the agent from dying mid-loop while waiting for
+         // the heartbeat to fire. Uses a 60s cooldown to avoid hammering.
+         if (!standaloneMode && (tier === "critical" || tier === "low_compute") && financial.usdcBalance >= 5) {
++          const economyAgentId = db.getIdentity("automatonId") || identity.address;
++          const funding = canSelfFundInference(db, economyAgentId, 500);
+           const INLINE_TOPUP_COOLDOWN_MS = 60_000;
+           const lastInlineTopup = db.getKV("last_inline_topup_attempt");
+           const cooldownExpired = !lastInlineTopup ||
+             Date.now() - new Date(lastInlineTopup).getTime() >= INLINE_TOPUP_COOLDOWN_MS;
+ 
+-          if (cooldownExpired) {
++          if (!funding.allowed) {
++            log(config, `[AUTO-TOPUP] Blocked: ${funding.reason}`);
++          } else if (cooldownExpired) {
+             db.setKV("last_inline_topup_attempt", new Date().toISOString());
+             try {
+               const { bootstrapTopup } = await import("../conway/topup.js");
++              const configuredPolicy = config.treasuryPolicy ?? DEFAULT_TREASURY_POLICY;
++              const topupPolicy = process.env.NOVENS_SELF_FUNDING === "1"
++                ? { ...configuredPolicy, maxX402PaymentCents: Math.max(configuredPolicy.maxX402PaymentCents, 500) }
++                : configuredPolicy;
+               const topupResult = await bootstrapTopup({
+                 apiUrl: config.conwayApiUrl,
+                 account: identity.account,
+                 creditsCents: financial.creditsCents,
+                 chainType: config.chainType || identity.chainType || "evm",
++                authorizePayment: (amountCents) => {
++                  if (amountCents !== 500) throw new Error("Autonomous self-funding is limited to the $5 tier");
++                  if (!spendTracker?.reserveSpend) throw new Error("Durable spend authorization unavailable");
++                  const check = canSelfFundInference(db, economyAgentId, amountCents);
++                  if (!check.allowed) throw new Error(check.reason);
++                  spendTracker.reserveSpend(
++                    { toolName: "inference_self_topup", amountCents, category: "x402" },
++                    topupPolicy,
++                  );
++                },
+               });
+               if (topupResult?.success) {
+-                log(config, `[AUTO-TOPUP] Bought $${topupResult.amountUsd} credits from USDC mid-loop`);
+-                // Re-fetch financial state after topup so the rest of
+-                // the turn sees the updated balance.
++                log(config, `[AUTO-TOPUP] Self-funded $${topupResult.amountUsd} of inference credits from free USDC`);
+                 financial = await getFinancialState(conway, identity.address, db, config.chainType || identity.chainType || "evm");
+               }
+             } catch (err: any) {
+@@ -794,31 +861,49 @@ export async function runAgentLoop(
+ 
+       // Build context — filter out purely idle turns (only status checks)
+       // to prevent the model from continuing a status-check pattern
+-      const allTurns = db.getRecentTurns(20);
++      const allTurns = db.getRecentTurns(valueMode ? Math.max(maxContextTurns * 2, 6) : 20);
+       const meaningfulTurns = allTurns.filter((t) => {
+-        if (t.toolCalls.length === 0) return true; // text-only turns are meaningful
++        if (t.toolCalls.length === 0) return true;
+         return t.toolCalls.some((tc) => !isIdleOnlyTool(tc.name));
+       });
+-      // Keep at least the last 2 turns for continuity, even if idle
+       const recentTurns = trimContext(
+         meaningfulTurns.length > 0 ? meaningfulTurns : allTurns.slice(-2),
++        valueMode ? maxContextTurns : 20,
+       );
+-      const systemPrompt = buildSystemPrompt({
+-        identity,
+-        config,
+-        financial,
+-        state: db.getAgentState(),
+-        db,
+-        tools,
+-        skills,
+-        isFirstRun,
+-      });
++      const gitMission = readGitMission();
++      const systemPrompt = valueMode
++        ? buildValueFirstSystemPrompt({
++            identity,
++            config,
++            financial,
++            state: db.getAgentState(),
++            gitMission,
++          })
++        : buildSystemPrompt({
++            identity,
++            config,
++            financial,
++            state: db.getAgentState(),
++            db,
++            tools,
++            skills,
++            isFirstRun,
++          });
+ 
+       // Phase 2.2: Pre-turn memory retrieval
+       let memoryBlock: string | undefined;
+       try {
+         const sessionId = db.getKV("session_id") || "default";
+-        const retriever = new MemoryRetriever(db.raw, DEFAULT_MEMORY_BUDGET);
++        const memoryBudget = valueMode
++          ? {
++              workingMemoryTokens: 250,
++              episodicMemoryTokens: 300,
++              semanticMemoryTokens: 300,
++              proceduralMemoryTokens: 200,
++              relationshipMemoryTokens: 150,
++            }
++          : DEFAULT_MEMORY_BUDGET;
++        const retriever = new MemoryRetriever(db.raw, memoryBudget);
+         const memories = retriever.retrieve(sessionId, pendingInput?.content);
+         if (memories.totalTokens > 0) {
+           memoryBlock = formatMemoryBlock(memories);
+@@ -895,6 +980,8 @@ export async function runAgentLoop(
+ 
+       // Capture input before clearing
+       const currentInput = pendingInput;
++      const economyAgentId = db.getIdentity("automatonId") || identity.address;
++      const economyBefore = db.getEconomyState(economyAgentId);
+ 
+       // Clear pending input after use
+       pendingInput = undefined;
+@@ -912,6 +999,7 @@ export async function runAgentLoop(
+           sessionId: db.getKV("session_id") || "default",
+           turnId: ulid(),
+           tools: inferenceTools,
++          maxTokens: valueMode ? maxOutputTokens : undefined,
+         },
+         (msgs, opts) => inference.chat(msgs, { ...opts, tools: inferenceTools }),
+       );
+@@ -1017,6 +1105,58 @@ export async function runAgentLoop(
+         // Memory failure must not block the agent loop
+       }
+ 
++      if (valueMode) {
++        const economyAfter = db.getEconomyState(economyAgentId);
++        const progress = turnCreatedValue(
++          turn,
++          seenArtifacts,
++          economyBefore?.economicValueCents,
++          economyAfter?.economicValueCents,
++        );
++
++        if (progress.createdValue) {
++          noValueTurns = 0;
++          tokensSinceValue = 0;
++          valueHoldCount = 0;
++          db.setKV("value_guard.no_progress_turns", "0");
++          db.setKV("value_guard.tokens_since_value", "0");
++          db.setKV("value_guard.hold_count", "0");
++          db.deleteKV("value_guard.hold_until");
++          db.deleteKV("value_guard.reason");
++          log(config, `[VALUE] Verified progress: ${progress.reason}`);
++        } else {
++          noValueTurns += 1;
++          tokensSinceValue += Math.max(0, turn.tokenUsage.totalTokens || 0);
++          db.setKV("value_guard.no_progress_turns", String(noValueTurns));
++          db.setKV("value_guard.tokens_since_value", String(tokensSinceValue));
++          log(
++            config,
++            `[VALUE] No verified progress (${noValueTurns}/${maxNoValueTurns}, ${tokensSinceValue}/${maxTokensWithoutValue} tokens).`,
++          );
++
++          if (noValueTurns >= maxNoValueTurns || tokensSinceValue >= maxTokensWithoutValue) {
++            const holdMs = nextValueHoldMs(valueHoldCount);
++            valueHoldCount += 1;
++            const holdUntil = new Date(Date.now() + holdMs).toISOString();
++            db.setKV("value_guard.hold_count", String(valueHoldCount));
++            db.setKV("value_guard.hold_until", holdUntil);
++            db.setKV("value_guard.reason", progress.reason);
++            db.setKV(
++              "value_guard.economic_value_cents",
++              String(economyAfter?.economicValueCents ?? 0n),
++            );
++            db.setKV("value_guard.no_progress_turns", "0");
++            noValueTurns = 0;
++            log(
++              config,
++              `[VALUE HOLD] No verified progress. Inference paused until ${holdUntil}; Git/economic checks continue without LLM calls.`,
++            );
++            running = false;
++            break;
++          }
++        }
++      }
++
+       // ── create_goal BLOCKED recovery ──
+       // Continuous mode: never sleep because a goal is blocked. Keep the runtime
+       // active, inspect the existing goal/worker, or choose a different productive action.
