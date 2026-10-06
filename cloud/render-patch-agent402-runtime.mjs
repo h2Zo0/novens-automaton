@@ -118,7 +118,7 @@ function write(file, content) { fs.writeFileSync(file, content); }
     "          if (duplicateReasoning && reasoningTask?.id) {",
     '            log(config, "[AGENT402 GATE] Recent reasoning already purchased for task " + reasoningTask.id + "; deterministic cooldown.");',
     "          }",
-    "          if (reasoningTask?.id) {"
+    "          if (reasoningTask?.id) {",
     '            db.setKV("reasoning_required.task_id", String(reasoningTask.id));',
     "            db.setKV(",
     '              "reasoning_required.reason",',
