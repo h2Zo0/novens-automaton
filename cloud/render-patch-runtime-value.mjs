@@ -143,4 +143,53 @@ replaceOnce(
 `
 );
 
+
+replaceOnce(
+  "src/agent/loop.ts",
+  `      const systemPrompt = valueMode
+        ? buildValueFirstSystemPrompt({
+            identity,
+            config,
+            financial,
+            state: db.getAgentState(),
+            gitMission,
+          })
+        : buildSystemPrompt({
+            identity,
+            config,
+            financial,
+            state: db.getAgentState(),
+            db,
+            tools,
+            skills,
+            isFirstRun,
+          });`,
+  `      // NOVENS_COMPLETE_AUTOMATON_PROMPT_V1
+      // Cloud/value mode keeps the complete upstream Automaton rule prompt
+      // (constitution, orchestration, planning, retries, circuit breakers,
+      // memory, persistence and self-preservation) and then adds NOVENS'
+      // stricter value-first economic discipline. Hard policy rules remain
+      // enforced independently by the policy engine.
+      const automatonSystemPrompt = buildSystemPrompt({
+        identity,
+        config,
+        financial,
+        state: db.getAgentState(),
+        db,
+        tools,
+        skills,
+        isFirstRun,
+      });
+      const systemPrompt = valueMode
+        ? automatonSystemPrompt + "\\n\\n--- NOVENS VALUE-FIRST ADDENDUM ---\\n" +
+          buildValueFirstSystemPrompt({
+            identity,
+            config,
+            financial,
+            state: db.getAgentState(),
+            gitMission,
+          })
+        : automatonSystemPrompt;`
+);
+
 console.log("[NOVENS CLOUD] Git dedupe + Daytona value execution patch applied.");
