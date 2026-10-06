@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { loadWalletAccount, getWalletChainType, getAutomatonDir } from "../identity/wallet.js";
-import { getUsdcBalance, x402Fetch } from "./x402.js";
+import { getUsdcBalanceDetailed, x402Fetch } from "./x402.js";
 import type { ChatMessage } from "../types.js";
 
 interface Agent402Params {
@@ -128,11 +128,17 @@ export async function callAgent402(params: Agent402Params): Promise<Agent402Resu
         );
       }
 
-      const balanceUsd = await getUsdcBalance(
+      const balanceRead = await getUsdcBalanceDetailed(
         account.address,
         "eip155:8453",
-        "evm",
       );
+      if (!balanceRead.ok) {
+        throw new Error(
+          "Base USDC balance read unavailable; refusing to treat RPC failure as zero: " +
+          String(balanceRead.error || "unknown read error"),
+        );
+      }
+      const balanceUsd = balanceRead.balance;
       const balanceCents = Math.floor(balanceUsd * 100);
       console.log(
         "[AGENT402 PAYMENT] quote=" + amountCents.toFixed(4) +
