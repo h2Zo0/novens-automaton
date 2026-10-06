@@ -32,7 +32,7 @@ interface DailyLedger {
   calls: number;
 }
 
-const ENDPOINT = "https://agent402.tools/v1/metered/chat/completions";
+const ENDPOINT = process.env.NOVENS_AGENT402_ENDPOINT || "https://agent402.tools/v1/auto/chat/completions";
 
 function positiveNumber(name: string, fallback: number): number {
   const value = Number(process.env[name] || fallback);
@@ -77,7 +77,7 @@ export async function callAgent402(params: Agent402Params): Promise<Agent402Resu
     throw new Error("Agent402 self-funded inference currently requires NOVENS' EVM wallet");
   }
 
-  const model = process.env.NOVENS_AGENT402_MODEL || "deepseek/deepseek-chat";
+  const model = process.env.NOVENS_AGENT402_MODEL || "auto";
   const maxCallCents = positiveNumber("NOVENS_AGENT402_MAX_CALL_CENTS", 25);
   const dailyCapCents = positiveNumber("NOVENS_AGENT402_DAILY_CENTS", 500);
   const outputCap = Math.max(
@@ -100,6 +100,9 @@ export async function callAgent402(params: Agent402Params): Promise<Agent402Resu
   }
   if (typeof params.temperature === "number") {
     requestBody.temperature = params.temperature;
+  }
+  if (ENDPOINT.includes("/v1/auto/")) {
+    requestBody.quality = process.env.NOVENS_AGENT402_QUALITY || "best";
   }
 
   let idempotencyKey = "novens-" + randomUUID();
@@ -188,9 +191,17 @@ export async function callAgent402(params: Agent402Params): Promise<Agent402Resu
   }
 
   if (!paid.success) {
+    const responseDetail =
+      typeof paid.response === "string"
+        ? paid.response.slice(0, 300)
+        : paid.response && typeof paid.response === "object"
+          ? JSON.stringify(paid.response).slice(0, 300)
+          : "";
     throw new Error(
       paid.error ||
-      "Agent402 inference failed with HTTP " + String(paid.status || "unknown"),
+      "Agent402 inference failed with HTTP " +
+        String(paid.status || "unknown") +
+        (responseDetail ? " — " + responseDetail : ""),
     );
   }
 
