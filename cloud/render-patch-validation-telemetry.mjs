@@ -27,7 +27,7 @@ replaceOnce(
       stream === 'stderr' ||
       /\\[AGENT402(?:\\]| )/.test(line) ||
       /\\[DAYTONA(?:\\]| )/.test(line) ||
-      /\\[TOOL(?: RESULT)?\\]/.test(line) ||
+      /\\[TOOL(?: RESULT)?\\]/.test(line) ||\n      /\\[PERSIST\\]/.test(line) ||
       /\\[(?:DETERMINISTIC|NOVENS KEEPALIVE|NOVENS COOLDOWN|THINK|LOOP END)\\]/.test(line) ||
       /\\b(?:ERROR|WARN)\\b/.test(line);
 
