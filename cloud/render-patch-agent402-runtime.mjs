@@ -73,6 +73,15 @@ function write(file, content) { fs.writeFileSync(file, content); }
 {
   const file = "src/agent/loop.ts";
   let src = read(file);
+
+  if (!src.includes('import { isAgent402DailyCapExhausted } from "../conway/agent402-inference.js";')) {
+    const importNeedle = 'import { isIdleOnlyTool } from "./idle-only-tools.js";';
+    if (!src.includes(importNeedle)) throw new Error("Agent402 cap-gate import target missing");
+    src = src.replace(
+      importNeedle,
+      importNeedle + '\nimport { isAgent402DailyCapExhausted } from "../conway/agent402-inference.js";',
+    );
+  }
   const start = src.indexOf("      // NOVENS_DETERMINISTIC_ONLY_GATE_V1");
   const end = src.indexOf("      // ── Inference Call (via router when available) ──", start);
   if (start < 0 || end < 0) throw new Error("Agent402 deterministic gate markers missing");
@@ -93,7 +102,9 @@ function write(file, content) { fs.writeFileSync(file, content); }
     "          reasoningTask = undefined;",
     "        }",
     "",
-    '        const agent402Ready = process.env.NOVENS_AGENT402_ENABLED === "1";',
+    '        const agent402Enabled = process.env.NOVENS_AGENT402_ENABLED === "1";',
+    '        const agent402CapExhausted = agent402Enabled && isAgent402DailyCapExhausted();',
+    '        const agent402Ready = agent402Enabled && !agent402CapExhausted;',
     '        const previousReasoningTask = db.getKV("reasoning_required.task_id");',
     '        const previousReasoningAt = Number(db.getKV("reasoning_required.at_ms") || "0");',
     "        const reasoningCooldownMs = 15_000;",
@@ -115,7 +126,12 @@ function write(file, content) { fs.writeFileSync(file, content); }
     "          );",
     "          // Continue into the normal inference/tool path.",
     "        } else {",
-    "          if (duplicateReasoning && reasoningTask?.id) {",
+    "          if (agent402CapExhausted && reasoningTask?.id) {",
+    '            db.setKV("reasoning_required.task_id", String(reasoningTask.id));',
+    '            db.setKV("reasoning_required.reason", "Agent402 daily cap exhausted; paid reasoning deferred until daily ledger reset.");',
+    '            log(config, "[AGENT402 CAP] Daily inference cap exhausted. No paid request sent; task " + reasoningTask.id + " deferred.");',
+    "          }",
+    "          if (duplicateReasoning && reasoningTask?.id) {
     '            log(config, "[AGENT402 GATE] Recent reasoning already purchased for task " + reasoningTask.id + "; deterministic cooldown.");',
     "            const cooldownRemainingMs = Math.max(250, reasoningCooldownMs - (Date.now() - previousReasoningAt));",
     '            db.setKV("sleep_until", new Date(Date.now() + cooldownRemainingMs).toISOString());',
@@ -125,7 +141,9 @@ function write(file, content) { fs.writeFileSync(file, content); }
     '            db.setKV("reasoning_required.task_id", String(reasoningTask.id));',
     "            db.setKV(",
     '              "reasoning_required.reason",',
-    '              "Parent task needs semantic/generative execution; no self-funded inference route is enabled.",',
+    '              agent402CapExhausted',
+    '                ? "Agent402 daily cap exhausted; paid reasoning deferred until daily ledger reset."',
+    '                : "Parent task needs semantic/generative execution; no self-funded inference route is enabled.",',
     "            );",
     "          } else {",
     '            db.deleteKV("reasoning_required.task_id");',
