@@ -95,7 +95,7 @@ function write(file, content) { fs.writeFileSync(file, content); }
     '            "SELECT id, title, description FROM task_graph " +',
     '            "WHERE assigned_to = ? AND status IN (\'assigned\',\'running\') " +',
     '            "ORDER BY CASE WHEN id = ? AND ? > ? THEN 1 ELSE 0 END ASC, priority DESC, created_at ASC LIMIT 1",',
-    "          ).get(identity.address, db.getKV("reasoning_required.task_id") || "", Number(db.getKV("reasoning_required.backoff_until_ms") || "0"), Date.now()) as",
+    '          ).get(identity.address, db.getKV("reasoning_required.task_id") || "", Number(db.getKV("reasoning_required.backoff_until_ms") || "0"), Date.now()) as',
     "            | { id?: string; title?: string; description?: string }",
     "            | undefined;",
     "        } catch {",
