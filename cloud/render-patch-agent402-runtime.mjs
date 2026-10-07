@@ -137,7 +137,7 @@ function write(file, content) { fs.writeFileSync(file, content); }
     "              const cursor = Math.max(0, Number(db.getKV(\"revenue_daytona.cursor\") || \"0\"));",
     "              const ids = [\"offer-audit-kit\", \"lead-magnet-kit\", \"automation-service-kit\"];",
     "              const commands = [\"mkdir -p revenue/offer-audit-kit && echo Revenue-audit-deliverable > revenue/offer-audit-kit/OFFER.md\", \"mkdir -p revenue/lead-magnet-kit && echo Lead-generation-deliverable > revenue/lead-magnet-kit/DELIVERABLE.md\", \"mkdir -p revenue/automation-service-kit && echo Automation-service-deliverable > revenue/automation-service-kit/SERVICE.md\"];",
-    "              const idx = cursor;"
+    "              const idx = cursor;",
     "              if (idx >= ids.length) { db.setKV(\"revenue_daytona.queue_state\", \"exhausted\"); log(config, \"[REVENUE QUEUE] Queue exhausted; no Daytona execution.\"); } else { log(config, \"[REVENUE QUEUE] Executing Daytona mission \" + ids[idx] + \" without paid reasoning.\");"
     "              const execResult = await conway.exec(commands[idx], 120000);",
     "              db.setKV(\"revenue_daytona.cursor\", String(cursor + 1));",
@@ -150,7 +150,7 @@ function write(file, content) { fs.writeFileSync(file, content); }
     "                log(config, \"[REVENUE QUEUE] Daytona mission failed; rotating.\");",
     "              }",
     "              }",
-    "            } catch (daytonaRevenueError) {"
+    "            } catch (daytonaRevenueError) {",
     "              db.setKV(\"revenue_daytona.last_error\", String(daytonaRevenueError));",
     "              log(config, \"[REVENUE QUEUE] Daytona execution unavailable; rotating.\");",
     "            }",
