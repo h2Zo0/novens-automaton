@@ -136,6 +136,18 @@ function compactToolsForAgent402(tools: unknown[] | undefined): unknown[] | unde
   return ordered.slice(0, 16);
 }
 
+export class Agent402DailyCapError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "Agent402DailyCapError";
+  }
+}
+
+export function isAgent402DailyCapExhausted(): boolean {
+  const dailyCapCents = positiveNumber("NOVENS_AGENT402_DAILY_CENTS", 500);
+  return readLedger().spentCents >= dailyCapCents;
+}
+
 export async function callAgent402(params: Agent402Params): Promise<Agent402Result> {
   if (process.env.NOVENS_AGENT402_ENABLED !== "1") {
     throw new Error("Agent402 inference is disabled");
@@ -150,6 +162,14 @@ export async function callAgent402(params: Agent402Params): Promise<Agent402Resu
   const model = process.env.NOVENS_AGENT402_MODEL || "google/gemini-3.1-flash-lite";
   const maxCallCents = positiveNumber("NOVENS_AGENT402_MAX_CALL_CENTS", 25);
   const dailyCapCents = positiveNumber("NOVENS_AGENT402_DAILY_CENTS", 500);
+  const ledgerBeforeRequest = readLedger();
+  if (ledgerBeforeRequest.spentCents >= dailyCapCents) {
+    throw new Agent402DailyCapError(
+      "Agent402 daily cap exhausted: " +
+      ledgerBeforeRequest.spentCents.toFixed(2) + "c / " +
+      dailyCapCents.toFixed(2) + "c",
+    );
+  }
   const outputCap = Math.max(
     64,
     Math.min(
@@ -205,7 +225,7 @@ export async function callAgent402(params: Agent402Params): Promise<Agent402Resu
     async (amountCents) => {
       const ledger = readLedger();
       if (ledger.spentCents + amountCents > dailyCapCents) {
-        throw new Error(
+        throw new Agent402DailyCapError(
           "Agent402 daily cap would be exceeded: " +
           ledger.spentCents.toFixed(2) + "c + " +
           amountCents.toFixed(2) + "c > " +
