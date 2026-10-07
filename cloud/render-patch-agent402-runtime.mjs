@@ -131,7 +131,7 @@ function write(file, content) { fs.writeFileSync(file, content); }
     '            db.setKV("reasoning_required.reason", "Agent402 daily cap exhausted; paid reasoning deferred until daily ledger reset.");',
     '            log(config, "[AGENT402 CAP] Daily inference cap exhausted. No paid request sent; task " + reasoningTask.id + " deferred.");',
     "          }",
-    "          if (duplicateReasoning && reasoningTask?.id) {
+    "          if (duplicateReasoning && reasoningTask?.id) {",
     '            log(config, "[AGENT402 GATE] Recent reasoning already purchased for task " + reasoningTask.id + "; deterministic cooldown.");',
     "            const cooldownRemainingMs = Math.max(250, reasoningCooldownMs - (Date.now() - previousReasoningAt));",
     '            db.setKV("sleep_until", new Date(Date.now() + cooldownRemainingMs).toISOString());',
