@@ -129,7 +129,7 @@ function write(file, content) { fs.writeFileSync(file, content); }
     "          if (agent402CapExhausted && reasoningTask?.id) {",
     '            db.setKV("reasoning_required.task_id", String(reasoningTask.id));',
     '            db.setKV("reasoning_required.reason", "Agent402 daily cap exhausted; paid reasoning deferred until daily ledger reset.");',
-    '            log(config, "[AGENT402 CAP] Daily inference cap exhausted. No paid request sent; task " + reasoningTask.id + " deferred.");',
+    '            log(config, "[AGENT402 CAP] Daily inference cap exhausted. No paid request sent; task " + reasoningTask.id + " deferred.");\n            db.setKV("execution_priority", "daytona");\n            db.setKV("daytona_fallback_reason", "Agent402 cap exhausted; prioritize already-specified executable work without paid reasoning.");\n            log(config, "[DAYTONA PRIORITY] Agent402 unavailable; Daytona/executable deterministic work is now preferred.");',
     "          }",
     "          if (duplicateReasoning && reasoningTask?.id) {",
     '            log(config, "[AGENT402 GATE] Recent reasoning already purchased for task " + reasoningTask.id + "; deterministic cooldown.");',
