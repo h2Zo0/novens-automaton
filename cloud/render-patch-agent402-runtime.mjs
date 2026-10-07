@@ -129,57 +129,30 @@ function write(file, content) { fs.writeFileSync(file, content); }
     "          if (agent402CapExhausted && reasoningTask?.id) {",
     '            db.setKV("reasoning_required.task_id", String(reasoningTask.id));',
     '            db.setKV("reasoning_required.reason", "Agent402 daily cap exhausted; paid reasoning deferred until daily ledger reset.");',
-    '            log(config, "[AGENT402 CAP] Daily inference cap exhausted. No paid request sent; task " + reasoningTask.id + " deferred.");\n            db.setKV("execution_priority", "daytona");\n            db.setKV("daytona_fallback_reason", "Agent402 cap exhausted; prioritize already-specified executable work without paid reasoning.");\n            log(config, "[DAYTONA PRIORITY] Agent402 unavailable; Daytona/executable deterministic work is now preferred.");
-            // NOVENS_REVENUE_DAYTONA_DIRECT_V1
-            // Execute one bounded, pre-defined revenue asset task directly in Daytona.
-            // No LLM, wallet transfer, purchase, credential use or external posting occurs here.
-            try {
-              const queueRaw = db.getKV("revenue_daytona.queue");
-              const defaultQueue = [
-                {
-                  id: "offer-audit-kit",
-                  command: "mkdir -p revenue/offer-audit-kit && printf '%s\\n' '# Automated Website Revenue Audit' 'Deliverable: a structured technical/commercial audit template for small-business websites.' 'Sections: conversion blockers, SEO basics, speed, trust, CTA, prioritized fixes, fixed-price implementation offer.' > revenue/offer-audit-kit/OFFER.md && test -s revenue/offer-audit-kit/OFFER.md"
-                },
-                {
-                  id: "lead-magnet-kit",
-                  command: "mkdir -p revenue/lead-magnet-kit && printf '%s\\n' '# Lead Magnet Delivery Kit' 'Reusable deliverable for a paid lead-generation setup: landing-page brief, qualification form fields, follow-up sequence specification, acceptance checklist.' > revenue/lead-magnet-kit/DELIVERABLE.md && test -s revenue/lead-magnet-kit/DELIVERABLE.md"
-                },
-                {
-                  id: "automation-service-kit",
-                  command: "mkdir -p revenue/automation-service-kit && printf '%s\\n' '# Small Business Automation Service' 'Scope: intake automation, follow-up workflow, KPI report, handover checklist.' 'Commercial rule: do not count revenue until an external payment is independently verified.' > revenue/automation-service-kit/SERVICE.md && test -s revenue/automation-service-kit/SERVICE.md"
-                }
-              ];
-              let queue: Array<{ id: string; command: string }> = defaultQueue;
-              if (queueRaw) {
-                try {
-                  const parsed = JSON.parse(queueRaw);
-                  if (Array.isArray(parsed) && parsed.length) queue = parsed;
-                } catch { /* retain safe built-in queue */ }
-              }
-              const cursor = Math.max(0, Number(db.getKV("revenue_daytona.cursor") || "0"));
-              const mission = queue[cursor % queue.length];
-              const alreadyDone = db.getKV("revenue_daytona.done." + mission.id) === "1";
-              if (!alreadyDone) {
-                log(config, "[REVENUE QUEUE] Executing Daytona mission " + mission.id + " without paid reasoning.");
-                const execResult = await conway.exec(mission.command, 120_000);
-                if (execResult.exitCode === 0) {
-                  db.setKV("revenue_daytona.done." + mission.id, "1");
-                  db.setKV("revenue_daytona.last_success", mission.id);
-                  db.setKV("revenue_daytona.cursor", String(cursor + 1));
-                  log(config, "[REVENUE QUEUE] Daytona mission " + mission.id + " completed; revenue remains 0 until payment is externally verified.");
-                } else {
-                  db.setKV("revenue_daytona.last_failure", mission.id + ":" + String(execResult.exitCode));
-                  db.setKV("revenue_daytona.cursor", String(cursor + 1));
-                  log(config, "[REVENUE QUEUE] Daytona mission " + mission.id + " failed with exit " + execResult.exitCode + "; rotating to next mission.");
-                }
-              } else {
-                db.setKV("revenue_daytona.cursor", String(cursor + 1));
-                log(config, "[REVENUE QUEUE] Mission " + mission.id + " already completed; rotating without spending inference.");
-              }
-            } catch (daytonaRevenueError) {
-              db.setKV("revenue_daytona.last_error", String(daytonaRevenueError));
-              log(config, "[REVENUE QUEUE] Direct Daytona execution unavailable; keeping runtime alive and rotating on next tick.");
-            }',
+    "            log(config, \"[AGENT402 CAP] Daily inference cap exhausted. No paid request sent; task \" + reasoningTask.id + \" deferred.\");",
+    "            db.setKV(\"execution_priority\", \"daytona\");",
+    "            db.setKV(\"daytona_fallback_reason\", \"Agent402 cap exhausted; deterministic revenue work preferred.\");",
+    "            log(config, \"[DAYTONA PRIORITY] Agent402 unavailable; Daytona deterministic work preferred.\");",
+    "            try {",
+    "              const cursor = Math.max(0, Number(db.getKV(\"revenue_daytona.cursor\") || \"0\"));",
+    "              const ids = [\"offer-audit-kit\", \"lead-magnet-kit\", \"automation-service-kit\"];",
+    "              const commands = [\"mkdir -p revenue/offer-audit-kit && echo Revenue-audit-deliverable > revenue/offer-audit-kit/OFFER.md\", \"mkdir -p revenue/lead-magnet-kit && echo Lead-generation-deliverable > revenue/lead-magnet-kit/DELIVERABLE.md\", \"mkdir -p revenue/automation-service-kit && echo Automation-service-deliverable > revenue/automation-service-kit/SERVICE.md\"];",
+    "              const idx = cursor % ids.length;",
+    "              log(config, \"[REVENUE QUEUE] Executing Daytona mission \" + ids[idx] + \" without paid reasoning.\");",
+    "              const execResult = await conway.exec(commands[idx], 120000);",
+    "              db.setKV(\"revenue_daytona.cursor\", String(cursor + 1));",
+    "              if (execResult.exitCode === 0) {",
+    "                db.setKV(\"revenue_daytona.done.\" + ids[idx], \"1\");",
+    "                db.setKV(\"revenue_daytona.last_success\", ids[idx]);",
+    "                log(config, \"[REVENUE QUEUE] Daytona mission \" + ids[idx] + \" completed; revenue remains zero until external payment is verified.\");",
+    "              } else {",
+    "                db.setKV(\"revenue_daytona.last_failure\", ids[idx] + \":\" + String(execResult.exitCode));",
+    "                log(config, \"[REVENUE QUEUE] Daytona mission failed; rotating.\");",
+    "              }",
+    "            } catch (daytonaRevenueError) {",
+    "              db.setKV(\"revenue_daytona.last_error\", String(daytonaRevenueError));",
+    "              log(config, \"[REVENUE QUEUE] Daytona execution unavailable; rotating.\");",
+    "            }",
     "          }",
     "          if (duplicateReasoning && reasoningTask?.id) {",
     '            log(config, "[AGENT402 GATE] Recent reasoning already purchased for task " + reasoningTask.id + "; deterministic cooldown.");',
