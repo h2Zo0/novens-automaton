@@ -134,6 +134,8 @@ function write(file, content) { fs.writeFileSync(file, content); }
     "            db.setKV(\"daytona_fallback_reason\", \"Agent402 cap exhausted; deterministic revenue work preferred.\");",
     "            log(config, \"[DAYTONA PRIORITY] Agent402 unavailable; Daytona deterministic work preferred.\");",
     "            try {",
+    "              const queueVersion = \"2\";",
+    "              if (db.getKV(\"revenue_daytona.queue_version\") !== queueVersion) { db.setKV(\"revenue_daytona.queue_version\", queueVersion); db.setKV(\"revenue_daytona.cursor\", \"0\"); }",
     "              const cursor = Math.max(0, Number(db.getKV(\"revenue_daytona.cursor\") || \"0\"));",
     "              const ids = [\"offer-audit-kit\", \"lead-magnet-kit\", \"automation-service-kit\"];",
     "              const commands = [\"mkdir -p revenue/offer-audit-kit && echo Revenue-audit-deliverable > revenue/offer-audit-kit/OFFER.md\", \"mkdir -p revenue/lead-magnet-kit && echo Lead-generation-deliverable > revenue/lead-magnet-kit/DELIVERABLE.md\", \"mkdir -p revenue/automation-service-kit && echo Automation-service-deliverable > revenue/automation-service-kit/SERVICE.md\"];",
